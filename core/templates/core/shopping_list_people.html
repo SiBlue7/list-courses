@@ -1,0 +1,13 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Modifier personnes{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Modifier le nombre de personnes</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button class="btn primary" type="submit">Mettre à jour</button>
+        <a class="btn" href="{% url 'shopping_list_detail' shopping_list.id %}">Annuler</a>
+    </form>
+</div>
+{% endblock %}

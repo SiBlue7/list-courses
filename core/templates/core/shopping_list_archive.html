@@ -1,0 +1,22 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Archives{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Listes archivées</h1>
+</div>
+<div class="card">
+    {% if closed_lists %}
+        {% for lst in closed_lists %}
+            <div class="list-item">
+                <div>
+                    <strong>{{ lst.name }}</strong>
+                    <div class="small muted">Clôturée le {{ lst.closed_at|date:"d/m/Y" }}</div>
+                </div>
+                <a class="btn" href="{% url 'shopping_list_detail' lst.id %}">Voir</a>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">Aucune liste clôturée pour le moment.</p>
+    {% endif %}
+</div>
+{% endblock %}

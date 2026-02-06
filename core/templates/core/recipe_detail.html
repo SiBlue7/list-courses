@@ -1,0 +1,37 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}{{ recipe.name }}{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>{{ recipe.name }}</h1>
+    <p class="muted">Quantités indiquées pour 1 personne.</p>
+    <a class="btn" href="{% url 'recipe_list' %}">Retour</a>
+    <a class="btn danger" href="{% url 'recipe_delete' recipe.id %}">Supprimer</a>
+</div>
+<div class="card">
+    <h2>Ingrédients</h2>
+    {% if recipe.ingredients.all %}
+        {% for ingredient in recipe.ingredients.all %}
+            <div class="list-item">
+                <div>
+                    <strong>{{ ingredient.name }}</strong>
+                    <div class="small muted">{{ ingredient.quantity_per_person }} {{ ingredient.get_unit_display }}</div>
+                </div>
+                <form method="post" action="{% url 'recipe_ingredient_delete' ingredient.id %}">
+                    {% csrf_token %}
+                    <button class="btn" type="submit">Supprimer</button>
+                </form>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">Aucun ingrédient pour le moment.</p>
+    {% endif %}
+</div>
+<div class="card">
+    <h2>Ajouter un ingrédient</h2>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button class="btn primary" type="submit">Ajouter</button>
+    </form>
+</div>
+{% endblock %}

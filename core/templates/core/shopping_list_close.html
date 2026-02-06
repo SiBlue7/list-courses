@@ -1,0 +1,13 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Clôturer la liste{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Clôturer la liste</h1>
+    <p>Confirmer la clôture de <strong>{{ shopping_list.name }}</strong> ?</p>
+    <form method="post">
+        {% csrf_token %}
+        <button class="btn danger" type="submit">Clôturer</button>
+        <a class="btn" href="{% url 'shopping_list_detail' shopping_list.id %}">Annuler</a>
+    </form>
+</div>
+{% endblock %}

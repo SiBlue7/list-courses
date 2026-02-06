@@ -1,0 +1,39 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Tableau de bord{% endblock %}
+{% block content %}
+<h1>Tableau de bord</h1>
+<div class="row">
+    <div class="card">
+        <h2>Liste active</h2>
+        {% if active_list %}
+            <p><strong>{{ active_list.name }}</strong> · {{ active_list.people_count }} personne(s)</p>
+            <a class="btn primary" href="{% url 'shopping_list_detail' active_list.id %}">Ouvrir la liste</a>
+        {% else %}
+            <p class="muted">Aucune liste active.</p>
+            <a class="btn primary" href="{% url 'shopping_list_create' %}">Créer une liste</a>
+        {% endif %}
+    </div>
+    <div class="card">
+        <h2>Recettes</h2>
+        <p>{{ recipes_count }} recette(s)</p>
+        <a class="btn" href="{% url 'recipe_list' %}">Voir les recettes</a>
+        <a class="btn primary" href="{% url 'recipe_create' %}">Nouvelle recette</a>
+    </div>
+</div>
+<div class="card">
+    <h2>Listes ouvertes</h2>
+    {% if open_lists %}
+        {% for lst in open_lists %}
+            <div class="list-item">
+                <div>
+                    <strong>{{ lst.name }}</strong>
+                    <div class="small muted">{{ lst.people_count }} personne(s) · Créée le {{ lst.created_at|date:"d/m/Y" }}</div>
+                </div>
+                <a class="btn" href="{% url 'shopping_list_detail' lst.id %}">Ouvrir</a>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">Aucune liste ouverte pour le moment.</p>
+    {% endif %}
+</div>
+{% endblock %}

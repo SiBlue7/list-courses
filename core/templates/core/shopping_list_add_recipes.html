@@ -1,0 +1,38 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Ajouter des recettes{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Ajouter des recettes</h1>
+    <p class="muted">Par défaut, le nombre de personnes est {{ shopping_list.people_count }}.</p>
+    <form method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="message">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        {% if form.recipe_rows %}
+            {% for row in form.recipe_rows %}
+                <div class="list-item">
+                    <div>
+                        <strong>{{ row.recipe.name }}</strong>
+                        <div class="small muted">{{ row.recipe.ingredients.count }} ingrédient(s)</div>
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <label class="small">Choisir</label>
+                        {{ row.select }}
+                        <label class="small">Personnes</label>
+                        {{ row.people }}
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p class="muted">Aucune recette disponible.</p>
+        {% endif %}
+
+        <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn primary" type="submit">Ajouter à la liste</button>
+            <a class="btn" href="{% url 'shopping_list_detail' shopping_list.id %}">Retour</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

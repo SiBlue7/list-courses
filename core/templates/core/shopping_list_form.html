@@ -1,0 +1,14 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Nouvelle liste{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Nouvelle liste</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button class="btn primary" type="submit">Créer</button>
+        <a class="btn" href="{% url 'dashboard' %}">Annuler</a>
+    </form>
+    <p class="small muted">Toutes les listes sont partagées avec tous les utilisateurs.</p>
+</div>
+{% endblock %}

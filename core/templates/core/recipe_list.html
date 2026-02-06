@@ -1,0 +1,23 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Recettes{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Recettes</h1>
+    <a class="btn primary" href="{% url 'recipe_create' %}">Nouvelle recette</a>
+</div>
+<div class="card">
+    {% if recipes %}
+        {% for recipe in recipes %}
+            <div class="list-item">
+                <div>
+                    <strong>{{ recipe.name }}</strong>
+                    <div class="small muted">{{ recipe.ingredients.count }} ingrédient(s)</div>
+                </div>
+                <a class="btn" href="{% url 'recipe_detail' recipe.id %}">Voir</a>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">Aucune recette pour l'instant.</p>
+    {% endif %}
+</div>
+{% endblock %}

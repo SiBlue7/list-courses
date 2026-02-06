@@ -1,0 +1,13 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Supprimer la recette{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Supprimer la recette</h1>
+    <p>Confirmer la suppression de <strong>{{ recipe.name }}</strong> ?</p>
+    <form method="post">
+        {% csrf_token %}
+        <button class="btn danger" type="submit">Supprimer</button>
+        <a class="btn" href="{% url 'recipe_detail' recipe.id %}">Annuler</a>
+    </form>
+</div>
+{% endblock %}

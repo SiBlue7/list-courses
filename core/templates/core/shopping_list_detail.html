@@ -1,0 +1,56 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}{{ shopping_list.name }}{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>{{ shopping_list.name }}</h1>
+    <p class="muted">{{ shopping_list.people_count }} personne(s)</p>
+    <p class="small muted">Partagée avec tous les utilisateurs.</p>
+    {% if shopping_list.is_closed %}
+        <p class="badge">Liste clôturée</p>
+    {% endif %}
+    <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+        <a class="btn" href="{% url 'shopping_list_add_recipes' shopping_list.id %}">Ajouter des recettes</a>
+        <a class="btn" href="{% url 'shopping_list_update_people' shopping_list.id %}">Modifier personnes</a>
+        {% if not shopping_list.is_closed %}
+            <a class="btn danger" href="{% url 'shopping_list_close' shopping_list.id %}">Clôturer</a>
+        {% endif %}
+    </div>
+</div>
+<div class="card">
+    <h2>Liste de courses</h2>
+    {% if shopping_list.items.all %}
+        {% for item in shopping_list.items.all %}
+            <div class="list-item">
+                <div>
+                    <strong>{% if item.checked %}[OK] {% endif %}{{ item.name }}</strong>
+                    <div class="small muted">{{ item.quantity }} {{ item.get_unit_display }}</div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    {% if not shopping_list.is_closed %}
+                        <form method="post" action="{% url 'shopping_list_toggle_item' shopping_list.id item.id %}">
+                            {% csrf_token %}
+                            <button class="btn" type="submit">{% if item.checked %}Décocher{% else %}Cocher{% endif %}</button>
+                        </form>
+                        <form method="post" action="{% url 'shopping_list_remove_item' shopping_list.id item.id %}">
+                            {% csrf_token %}
+                            <button class="btn" type="submit">Supprimer</button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">Aucun ingrédient dans la liste pour le moment.</p>
+    {% endif %}
+</div>
+{% if not shopping_list.is_closed %}
+<div class="card">
+    <h2>Ajouter un ingrédient manuel</h2>
+    <form method="post">
+        {% csrf_token %}
+        {{ manual_form.as_p }}
+        <button class="btn primary" type="submit">Ajouter</button>
+    </form>
+</div>
+{% endif %}
+{% endblock %}
