@@ -1,0 +1,25 @@
+/* Main Style Entry Point */
+
+@import "variables.css";
+@import "reset.css";
+@import "typography.css";
+@import "layout.css";
+@import "components.css";
+
+/* Arrière-plan global */
+body {
+  background-color: var(--bg-primary);
+  background-image:
+    radial-gradient(
+      circle at 10% 20%,
+      rgba(255, 232, 218, 0.5),
+      transparent 25%
+    ),
+    radial-gradient(
+      circle at 90% 80%,
+      rgba(234, 242, 237, 0.6),
+      transparent 25%
+    ),
+    url("data:image/svg+xml,%3Csvg width='20' height='20' viewBox='0 0 20 20' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%237a6a58' fill-opacity='0.03' fill-rule='evenodd'%3E%3Ccircle cx='3' cy='3' r='1'/%3E%3Ccircle cx='13' cy='13' r='1'/%3E%3C/g%3E%3C/svg%3E");
+  background-attachment: fixed;
+}
