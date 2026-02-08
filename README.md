@@ -143,6 +143,17 @@ docker-compose down
 # Reconstruire après modification du code
 docker-compose up -d --build
 
+# Reconstruire proprement (si l'image garde l'ancien code)
+docker builder prune -af
+docker-compose build --no-cache web
+docker-compose up -d
+
+# Logs d'un service précis
+docker-compose logs -f web
+
+# Redémarrer uniquement le web
+docker-compose up -d --force-recreate web
+
 # Créer un superutilisateur
 docker-compose exec web python manage.py createsuperuser
 
@@ -151,6 +162,19 @@ docker-compose exec web python manage.py shell
 
 # Backup de la base de données
 docker-compose exec db pg_dump -U mealplanner mealplanner > backup.sql
+```
+
+### Cloudflare Tunnel (si utilisé)
+
+```bash
+# Lancer/relancer le tunnel (mode manuel)
+cloudflared tunnel run justdoeat
+
+# Si cloudflared tourne en service
+systemctl restart cloudflared
+
+# Vérifier que la config "originRequest.httpHostHeader" est bien appliquée
+cloudflared tunnel run justdoeat | grep originRequest
 ```
 
 ---
@@ -187,6 +211,17 @@ python manage.py migrate
 - [ ] Changer le mot de passe PostgreSQL
 - [ ] Configurer un firewall (UFW)
 - [ ] (Optionnel) Ajouter HTTPS avec Let's Encrypt
+
+---
+
+## 🧹 Nettoyage Production
+
+À faire avant une mise en prod stable :
+
+1. Supprimer le middleware de debug si présent : `mealplanner/debug_middleware.py` et sa ligne dans `MIDDLEWARE`.
+2. Désactiver les logs verbeux (`LOGGING` en DEBUG) dans `mealplanner/settings.py`.
+3. Vérifier que `DEBUG=False` et que `SECRET_KEY` provient d'une variable d'environnement.
+4. Ne pas exposer de mots de passe en clair dans `docker-compose.yml` (utiliser un `.env`).
 
 ---
 
