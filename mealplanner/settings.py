@@ -11,6 +11,37 @@ DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 ALLOWED_HOSTS = [host.strip() for host in ALLOWED_HOSTS]
 
+def env_bool(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def env_list(name, default=""):
+    value = os.environ.get(name, default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+CSRF_TRUSTED_ORIGINS = env_list(
+    "CSRF_TRUSTED_ORIGINS",
+    "https://lidl.justdoeat.org",
+)
+
+USE_X_FORWARDED_HOST = env_bool("USE_X_FORWARDED_HOST", True)
+
+SECURE_PROXY_SSL_HEADER = None
+_secure_proxy = os.environ.get("SECURE_PROXY_SSL_HEADER", "").strip()
+if _secure_proxy:
+    parts = [p.strip() for p in _secure_proxy.replace(",", " ").split()]
+    if len(parts) == 2:
+        SECURE_PROXY_SSL_HEADER = (parts[0], parts[1])
+
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", not DEBUG)
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", not DEBUG)
+CSRF_COOKIE_SAMESITE = os.environ.get("CSRF_COOKIE_SAMESITE", "Lax")
+SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',

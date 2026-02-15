@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: mealplanner
       POSTGRES_USER: mealplanner
-      POSTGRES_PASSWORD: changeme_secure_password
+      POSTGRES_PASSWORD: FqpRqR6BsRrg9KfP
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U mealplanner"]
@@ -28,10 +28,16 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DEBUG=False
-      - SECRET_KEY=changeme_generate_a_secure_key_here
-      - DATABASE_URL=postgresql://mealplanner:changeme_secure_password@db:5432/mealplanner
-      - ALLOWED_HOSTS=localhost,127.0.0.1,your-server-ip
+      - DEBUG=${DEBUG}
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}
+      - USE_X_FORWARDED_HOST=${USE_X_FORWARDED_HOST}
+      - SECURE_PROXY_SSL_HEADER=${SECURE_PROXY_SSL_HEADER}
+      - CSRF_COOKIE_SECURE=${CSRF_COOKIE_SECURE}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE}
+
     depends_on:
       db:
         condition: service_healthy
