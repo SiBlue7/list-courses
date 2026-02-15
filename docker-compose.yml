@@ -6,12 +6,12 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      POSTGRES_DB: mealplanner
-      POSTGRES_USER: mealplanner
-      POSTGRES_PASSWORD: FqpRqR6BsRrg9KfP
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mealplanner"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
