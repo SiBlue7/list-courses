@@ -1,0 +1,33 @@
+﻿<h2>Catalogue ({{ ingredients|length }})</h2>
+{% if ingredients %}
+    {% for ingredient in ingredients %}
+        <div class="list-item">
+            <div>
+                <strong>{{ ingredient.name }}</strong>
+                <div class="small muted">
+                    {% if ingredient.category %}
+                        {{ ingredient.category.name }}
+                    {% else %}
+                        Sans catégorie
+                    {% endif %}
+                </div>
+            </div>
+            <div style="display: flex; gap: 8px;">
+                <a
+                    class="btn"
+                    href="{% url 'ingredient_edit' ingredient.id %}?q={{ search_query|urlencode }}&category={{ selected_category|urlencode }}"
+                >
+                    Modifier
+                </a>
+                <form method="post" action="{% url 'ingredient_delete' ingredient.id %}" onsubmit="return confirm('Supprimer cet ingrédient ?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="q" value="{{ search_query }}" />
+                    <input type="hidden" name="category" value="{{ selected_category }}" />
+                    <button class="btn danger" type="submit">Supprimer</button>
+                </form>
+            </div>
+        </div>
+    {% endfor %}
+{% else %}
+    <p class="muted">Aucun ingrédient trouvé pour ce filtre.</p>
+{% endif %}

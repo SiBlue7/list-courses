@@ -6,11 +6,15 @@ urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('register/', views.register, name='register'),
 
+    path('ingredients/', views.ingredient_list, name='ingredient_list'),
+    path('ingredients/<int:ingredient_id>/edit/', views.ingredient_edit, name='ingredient_edit'),
+    path('ingredients/<int:ingredient_id>/delete/', views.ingredient_delete, name='ingredient_delete'),
+
     path('recipes/', views.recipe_list, name='recipe_list'),
     path('recipes/new/', views.recipe_create, name='recipe_create'),
     path('recipes/<int:recipe_id>/', views.recipe_detail, name='recipe_detail'),
     path('recipes/<int:recipe_id>/delete/', views.recipe_delete, name='recipe_delete'),
-    path('ingredients/<int:ingredient_id>/delete/', views.recipe_ingredient_delete, name='recipe_ingredient_delete'),
+    path('recipes/ingredients/<int:ingredient_id>/delete/', views.recipe_ingredient_delete, name='recipe_ingredient_delete'),
 
     path('lists/new/', views.shopping_list_create, name='shopping_list_create'),
     path('lists/active/', views.shopping_list_active, name='shopping_list_active'),

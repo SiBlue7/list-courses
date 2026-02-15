@@ -11,46 +11,137 @@
     <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
         <a class="btn" href="{% url 'shopping_list_add_recipes' shopping_list.id %}">Ajouter des recettes</a>
         <a class="btn" href="{% url 'shopping_list_update_people' shopping_list.id %}">Modifier personnes</a>
+        <a class="btn" href="{% url 'ingredient_list' %}">Gérer les ingrédients</a>
         {% if not shopping_list.is_closed %}
             <a class="btn danger" href="{% url 'shopping_list_close' shopping_list.id %}">Clôturer</a>
         {% endif %}
     </div>
 </div>
+
 <div class="card">
     <h2>Liste de courses</h2>
-    {% if shopping_list.items.all %}
-        {% for item in shopping_list.items.all %}
-            <div class="list-item">
-                <div>
-                    <strong>{% if item.checked %}[OK] {% endif %}{{ item.name }}</strong>
-                    <div class="small muted">{{ item.quantity }} {{ item.get_unit_display }}</div>
+    {% if item_groups %}
+        {% for group in item_groups %}
+            <details open style="margin-top: 14px;">
+                <summary style="cursor: pointer; font-weight: 700;">
+                    {{ group.label }} ({{ group.entries|length }})
+                </summary>
+                <div style="margin-top: 8px;">
+                    {% for item in group.entries %}
+                        <div class="list-item">
+                            <div>
+                                <strong>{% if item.checked %}[OK] {% endif %}{{ item.display_name }}</strong>
+                                <div class="small muted">{{ item.quantity }} {{ item.get_unit_display }}</div>
+                            </div>
+                            <div style="display: flex; gap: 8px;">
+                                {% if not shopping_list.is_closed %}
+                                    <form method="post" action="{% url 'shopping_list_toggle_item' shopping_list.id item.id %}">
+                                        {% csrf_token %}
+                                        <button class="btn" type="submit">{% if item.checked %}Décocher{% else %}Cocher{% endif %}</button>
+                                    </form>
+                                    <form method="post" action="{% url 'shopping_list_remove_item' shopping_list.id item.id %}">
+                                        {% csrf_token %}
+                                        <button class="btn" type="submit">Supprimer</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
                 </div>
-                <div style="display: flex; gap: 8px;">
-                    {% if not shopping_list.is_closed %}
-                        <form method="post" action="{% url 'shopping_list_toggle_item' shopping_list.id item.id %}">
-                            {% csrf_token %}
-                            <button class="btn" type="submit">{% if item.checked %}Décocher{% else %}Cocher{% endif %}</button>
-                        </form>
-                        <form method="post" action="{% url 'shopping_list_remove_item' shopping_list.id item.id %}">
-                            {% csrf_token %}
-                            <button class="btn" type="submit">Supprimer</button>
-                        </form>
-                    {% endif %}
-                </div>
-            </div>
+            </details>
         {% endfor %}
     {% else %}
         <p class="muted">Aucun ingrédient dans la liste pour le moment.</p>
     {% endif %}
 </div>
+
 {% if not shopping_list.is_closed %}
 <div class="card">
-    <h2>Ajouter un ingrédient manuel</h2>
-    <form method="post">
-        {% csrf_token %}
-        {{ manual_form.as_p }}
-        <button class="btn primary" type="submit">Ajouter</button>
-    </form>
+    <h2>Ajouter un ingrédient manuel (recherche)</h2>
+    <p>
+        <label for="id_list_q">Nom</label>
+        <input id="id_list_q" type="text" name="q" value="{{ ingredient_query }}" placeholder="Ex: tomate" />
+    </p>
+    <p>
+        <label for="id_list_category">Catégorie</label>
+        <select id="id_list_category" name="category">
+            <option value="" {% if not selected_category %}selected{% endif %}>Toutes les catégories</option>
+            <option value="none" {% if selected_category == 'none' %}selected{% endif %}>Sans catégorie</option>
+            {% for category in ingredient_categories %}
+                <option value="{{ category.id }}" {% if selected_category == category.id|stringformat:'s' %}selected{% endif %}>{{ category.name }}</option>
+            {% endfor %}
+        </select>
+    </p>
+
+    <div id="shopping-list-ingredient-results" style="margin-top: 12px;">
+        {% include 'core/partials/shopping_list_ingredient_results.html' %}
+    </div>
 </div>
+{% endif %}
+
+{% if not shopping_list.is_closed %}
+<script>
+(() => {
+    const input = document.getElementById('id_list_q');
+    const category = document.getElementById('id_list_category');
+    const results = document.getElementById('shopping-list-ingredient-results');
+
+    if (!input || !category || !results) {
+        return;
+    }
+
+    let debounceTimer = null;
+    let activeController = null;
+
+    const refreshResults = () => {
+        const params = new URLSearchParams();
+        const query = input.value.trim();
+        const categoryValue = category.value;
+
+        if (query) {
+            params.set('q', query);
+        }
+        if (categoryValue) {
+            params.set('category', categoryValue);
+        }
+        params.set('partial', 'shopping_list_ingredients');
+
+        if (activeController) {
+            activeController.abort();
+        }
+
+        activeController = new AbortController();
+
+        fetch(`${window.location.pathname}?${params.toString()}`, {
+            method: 'GET',
+            signal: activeController.signal,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+        })
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error('Erreur de chargement');
+                }
+                return response.text();
+            })
+            .then((html) => {
+                results.innerHTML = html;
+            })
+            .catch((error) => {
+                if (error.name !== 'AbortError') {
+                    console.error(error);
+                }
+            });
+    };
+
+    input.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(refreshResults, 180);
+    });
+
+    category.addEventListener('change', refreshResults);
+})();
+</script>
 {% endif %}
 {% endblock %}

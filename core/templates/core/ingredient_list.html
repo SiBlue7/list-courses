@@ -1,0 +1,114 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Ingrédients{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Ingrédients communs</h1>
+    <p class="small muted">Utilisés dans les recettes et la liste de courses.</p>
+</div>
+
+<div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: stretch;">
+    <div class="card" style="flex: 1 1 320px; margin: 0;">
+        <h2>Créer un ingrédient</h2>
+        <form method="post">
+            {% csrf_token %}
+            {{ ingredient_form.as_p }}
+            <button class="btn primary" type="submit" name="create_ingredient" value="1">Créer</button>
+        </form>
+    </div>
+
+    <div class="card" style="flex: 1 1 320px; margin: 0;">
+        <h2>Créer une catégorie</h2>
+        <form method="post">
+            {% csrf_token %}
+            {{ category_form.as_p }}
+            <button class="btn" type="submit" name="create_category" value="1">Créer la catégorie</button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Recherche instantanée</h2>
+    <p>
+        <label for="id_q">Nom</label>
+        <input id="id_q" type="text" name="q" value="{{ search_query }}" placeholder="Ex: tomate" />
+    </p>
+    <p>
+        <label for="id_category">Catégorie</label>
+        <select id="id_category" name="category">
+            <option value="" {% if not selected_category %}selected{% endif %}>Toutes les catégories</option>
+            <option value="none" {% if selected_category == 'none' %}selected{% endif %}>Sans catégorie</option>
+            {% for category in categories %}
+                <option value="{{ category.id }}" {% if selected_category == category.id|stringformat:'s' %}selected{% endif %}>{{ category.name }}</option>
+            {% endfor %}
+        </select>
+    </p>
+</div>
+
+<div class="card" id="ingredient-catalog">
+    {% include 'core/partials/ingredient_catalog.html' %}
+</div>
+
+<script>
+(() => {
+    const input = document.getElementById('id_q');
+    const category = document.getElementById('id_category');
+    const catalog = document.getElementById('ingredient-catalog');
+
+    if (!input || !category || !catalog) {
+        return;
+    }
+
+    let debounceTimer = null;
+    let activeController = null;
+
+    const refreshCatalog = () => {
+        const params = new URLSearchParams();
+        const query = input.value.trim();
+        const categoryValue = category.value;
+
+        if (query) {
+            params.set('q', query);
+        }
+        if (categoryValue) {
+            params.set('category', categoryValue);
+        }
+        params.set('partial', '1');
+
+        if (activeController) {
+            activeController.abort();
+        }
+
+        activeController = new AbortController();
+
+        fetch(`${window.location.pathname}?${params.toString()}`, {
+            method: 'GET',
+            signal: activeController.signal,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+        })
+            .then((response) => {
+                if (!response.ok) {
+                    throw new Error('Erreur de chargement');
+                }
+                return response.text();
+            })
+            .then((html) => {
+                catalog.innerHTML = html;
+            })
+            .catch((error) => {
+                if (error.name !== 'AbortError') {
+                    console.error(error);
+                }
+            });
+    };
+
+    input.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(refreshCatalog, 180);
+    });
+
+    category.addEventListener('change', refreshCatalog);
+})();
+</script>
+{% endblock %}

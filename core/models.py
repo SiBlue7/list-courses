@@ -1,4 +1,5 @@
 ﻿from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -15,6 +16,35 @@ UNIT_CHOICES = [
 ]
 
 
+class IngredientCategory(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
+class Ingredient(models.Model):
+    name = models.CharField(max_length=200, unique=True)
+    category = models.ForeignKey(
+        IngredientCategory,
+        on_delete=models.SET_NULL,
+        related_name='ingredients',
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+
 class Recipe(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='recipes')
     name = models.CharField(max_length=200)
@@ -29,18 +59,22 @@ class Recipe(models.Model):
 
 class RecipeIngredient(models.Model):
     recipe = models.ForeignKey(Recipe, on_delete=models.CASCADE, related_name='ingredients')
-    name = models.CharField(max_length=200)
+    ingredient = models.ForeignKey(Ingredient, on_delete=models.PROTECT, related_name='recipe_usages')
     quantity_per_person = models.DecimalField(max_digits=8, decimal_places=2)
     unit = models.CharField(max_length=30, blank=True, choices=UNIT_CHOICES)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['name']
+        ordering = ['ingredient__name']
 
     def __str__(self):
         unit_label = self.get_unit_display()
         unit = f" {unit_label}" if unit_label else ''
-        return f"{self.name} ({self.quantity_per_person}{unit})"
+        return f"{self.display_name} ({self.quantity_per_person}{unit})"
+
+    @property
+    def display_name(self):
+        return self.ingredient.name
 
 
 class ShoppingList(models.Model):
@@ -66,6 +100,13 @@ class ShoppingList(models.Model):
 
 class ShoppingListItem(models.Model):
     shopping_list = models.ForeignKey(ShoppingList, on_delete=models.CASCADE, related_name='items')
+    ingredient = models.ForeignKey(
+        Ingredient,
+        on_delete=models.SET_NULL,
+        related_name='shopping_list_items',
+        null=True,
+        blank=True,
+    )
     name = models.CharField(max_length=200)
     unit = models.CharField(max_length=30, blank=True, choices=UNIT_CHOICES)
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
@@ -79,7 +120,18 @@ class ShoppingListItem(models.Model):
     def __str__(self):
         unit_label = self.get_unit_display()
         unit = f" {unit_label}" if unit_label else ''
-        return f"{self.name} ({self.quantity}{unit})"
+        return f"{self.display_name} ({self.quantity}{unit})"
+
+    @property
+    def display_name(self):
+        if self.ingredient:
+            return self.ingredient.name
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.ingredient:
+            self.name = self.ingredient.name
+        super().save(*args, **kwargs)
 
     def recalculate(self):
         if self.per_person_quantity is None:

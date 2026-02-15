@@ -1,9 +1,9 @@
 ﻿{% extends 'core/base.html' %}
-{% block title %}Supprimer l'ingrédient{% endblock %}
+{% block title %}Supprimer ingrédient{% endblock %}
 {% block content %}
 <div class="card">
-    <h1>Supprimer l'ingrédient</h1>
-    <p>Confirmer la suppression de <strong>{{ ingredient.name }}</strong> ?</p>
+    <h1>Supprimer ingrédient</h1>
+    <p>Confirmer la suppression de <strong>{{ ingredient.display_name }}</strong> ?</p>
     <form method="post">
         {% csrf_token %}
         <button class="btn danger" type="submit">Supprimer</button>

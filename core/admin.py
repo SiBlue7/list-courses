@@ -1,6 +1,19 @@
 ﻿from django.contrib import admin
 
-from .models import Recipe, RecipeIngredient, ShoppingList, ShoppingListItem
+from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem
+
+
+@admin.register(IngredientCategory)
+class IngredientCategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'created_at')
+    search_fields = ('name',)
+
+
+@admin.register(Ingredient)
+class IngredientAdmin(admin.ModelAdmin):
+    list_display = ('name', 'category', 'created_at')
+    list_filter = ('category',)
+    search_fields = ('name',)
 
 
 class RecipeIngredientInline(admin.TabularInline):

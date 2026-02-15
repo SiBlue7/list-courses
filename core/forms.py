@@ -1,8 +1,17 @@
-﻿from django import forms
+﻿from decimal import Decimal
+
+from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 
-from .models import Recipe, RecipeIngredient, ShoppingList, UNIT_CHOICES
+from .models import (
+    Ingredient,
+    IngredientCategory,
+    Recipe,
+    ShoppingList,
+    UNIT_CHOICES,
+)
 
 UNIT_CHOICES_WITH_EMPTY = [('', 'Sans unité')] + list(UNIT_CHOICES)
 
@@ -11,6 +20,48 @@ class RegistrationForm(UserCreationForm):
     class Meta:
         model = User
         fields = ['username', 'password1', 'password2']
+
+
+class IngredientCategoryForm(forms.ModelForm):
+    class Meta:
+        model = IngredientCategory
+        fields = ['name']
+        widgets = {
+            'name': forms.TextInput(attrs={'placeholder': 'Ex: Fruits et légumes'}),
+        }
+
+    def clean_name(self):
+        name = self.cleaned_data['name'].strip()
+        duplicates = IngredientCategory.objects.filter(name__iexact=name)
+        if self.instance.pk:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.exists():
+            raise ValidationError('Cette catégorie existe déjà.')
+        return name
+
+
+class IngredientForm(forms.ModelForm):
+    class Meta:
+        model = Ingredient
+        fields = ['name', 'category']
+        widgets = {
+            'name': forms.TextInput(attrs={'placeholder': 'Ex: Tomates'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['category'].queryset = IngredientCategory.objects.all().order_by('name')
+        self.fields['category'].required = False
+        self.fields['category'].empty_label = 'Sans catégorie'
+
+    def clean_name(self):
+        name = self.cleaned_data['name'].strip()
+        duplicates = Ingredient.objects.filter(name__iexact=name)
+        if self.instance.pk:
+            duplicates = duplicates.exclude(pk=self.instance.pk)
+        if duplicates.exists():
+            raise ValidationError('Cet ingrédient existe déjà.')
+        return name
 
 
 class RecipeForm(forms.ModelForm):
@@ -22,15 +73,22 @@ class RecipeForm(forms.ModelForm):
         }
 
 
-class RecipeIngredientForm(forms.ModelForm):
-    class Meta:
-        model = RecipeIngredient
-        fields = ['name', 'quantity_per_person', 'unit']
-        widgets = {
-            'name': forms.TextInput(attrs={'placeholder': 'Ex: Tomates'}),
-            'quantity_per_person': forms.NumberInput(attrs={'step': '0.01'}),
-            'unit': forms.Select(choices=UNIT_CHOICES_WITH_EMPTY),
-        }
+class RecipeIngredientQuickAddForm(forms.Form):
+    ingredient_id = forms.IntegerField(min_value=1, widget=forms.HiddenInput())
+    quantity_per_person = forms.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        min_value=Decimal('0.01'),
+        widget=forms.NumberInput(attrs={'step': '0.01'}),
+    )
+    unit = forms.ChoiceField(choices=UNIT_CHOICES_WITH_EMPTY, required=False)
+
+    def clean_ingredient_id(self):
+        ingredient_id = self.cleaned_data['ingredient_id']
+        ingredient = Ingredient.objects.filter(pk=ingredient_id).first()
+        if ingredient is None:
+            raise ValidationError('Ingrédient introuvable.')
+        return ingredient
 
 
 class ShoppingListForm(forms.ModelForm):
@@ -80,10 +138,22 @@ class AddRecipesForm(forms.Form):
         return selected
 
 
-class ManualItemForm(forms.Form):
-    name = forms.CharField(max_length=200)
-    quantity = forms.DecimalField(max_digits=10, decimal_places=2)
+class ManualItemQuickAddForm(forms.Form):
+    ingredient_id = forms.IntegerField(min_value=1, widget=forms.HiddenInput())
+    quantity = forms.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=Decimal('0.01'),
+        widget=forms.NumberInput(attrs={'step': '0.01'}),
+    )
     unit = forms.ChoiceField(choices=UNIT_CHOICES_WITH_EMPTY, required=False)
+
+    def clean_ingredient_id(self):
+        ingredient_id = self.cleaned_data['ingredient_id']
+        ingredient = Ingredient.objects.filter(pk=ingredient_id).first()
+        if ingredient is None:
+            raise ValidationError('Ingrédient introuvable.')
+        return ingredient
 
 
 class PeopleCountForm(forms.ModelForm):

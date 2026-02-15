@@ -1,0 +1,16 @@
+﻿{% extends 'core/base.html' %}
+{% block title %}Modifier ingrédient{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Modifier l'ingrédient</h1>
+    <p class="small muted">{{ ingredient.name }}</p>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <input type="hidden" name="list_q" value="{{ search_query }}" />
+        <input type="hidden" name="list_category" value="{{ selected_category }}" />
+        <button class="btn primary" type="submit">Enregistrer</button>
+        <a class="btn" href="{% url 'ingredient_list' %}?q={{ search_query|urlencode }}&category={{ selected_category|urlencode }}">Annuler</a>
+    </form>
+</div>
+{% endblock %}
