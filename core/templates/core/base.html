@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{% block title %}Listes de courses{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'core/css/style.css' %}" />
+    <link rel="stylesheet" href="{% static 'core/css/style.css' %}?v=20260514-shopping-checks" />
   </head>
   <body>
     <header>
@@ -32,7 +32,17 @@
       {% if messages %}
       <div class="messages">
         {% for message in messages %}
-        <div class="message">{{ message }}</div>
+        <div
+          class="message{% if message.tags %} {{ message.tags }}{% endif %}"
+          role="status"
+          aria-live="polite"
+          data-auto-dismiss-message
+        >
+          <span class="message-content">{{ message }}</span>
+          <button class="message-dismiss" type="button" aria-label="Fermer le message" data-dismiss-message>
+            &times;
+          </button>
+        </div>
         {% endfor %}
       </div>
       {% endif %} {% block content %}{% endblock %}
@@ -100,6 +110,38 @@
           },
           true
         );
+      })();
+
+      (() => {
+        const messages = document.querySelectorAll('[data-auto-dismiss-message]');
+        const defaultDelayMs = 5000;
+        const errorDelayMs = 8000;
+        const removalDelayMs = 250;
+
+        if (!messages.length) {
+          return;
+        }
+
+        const dismissMessage = (message) => {
+          if (message.classList.contains('is-hiding')) {
+            return;
+          }
+
+          message.classList.add('is-hiding');
+          window.setTimeout(() => {
+            message.remove();
+          }, removalDelayMs);
+        };
+
+        messages.forEach((message) => {
+          const dismissButton = message.querySelector('[data-dismiss-message]');
+          if (dismissButton) {
+            dismissButton.addEventListener('click', () => dismissMessage(message));
+          }
+
+          const delay = message.classList.contains('error') ? errorDelayMs : defaultDelayMs;
+          window.setTimeout(() => dismissMessage(message), delay);
+        });
       })();
     </script>
   </body>

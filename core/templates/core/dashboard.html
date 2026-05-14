@@ -6,7 +6,7 @@
     <div class="card">
         <h2>Liste active</h2>
         {% if active_list %}
-            <p><strong>{{ active_list.name }}</strong> · {{ active_list.people_count }} personne(s)</p>
+            <p><strong>{{ active_list.name }}</strong></p>
             <a class="btn primary" href="{% url 'shopping_list_detail' active_list.id %}">Ouvrir la liste</a>
         {% else %}
             <p class="muted">Aucune liste active.</p>
@@ -27,7 +27,7 @@
             <div class="list-item">
                 <div>
                     <strong>{{ lst.name }}</strong>
-                    <div class="small muted">{{ lst.people_count }} personne(s) · Créée le {{ lst.created_at|date:"d/m/Y" }}</div>
+                    <div class="small muted">Créée le {{ lst.created_at|date:"d/m/Y" }}</div>
                 </div>
                 <a class="btn" href="{% url 'shopping_list_detail' lst.id %}">Ouvrir</a>
             </div>

@@ -14,14 +14,20 @@ from .forms import (
     IngredientCategoryForm,
     IngredientForm,
     ManualItemQuickAddForm,
-    PeopleCountForm,
     RecipeForm,
     RecipeIngredientQuickAddForm,
     RegistrationForm,
+    ShoppingListRecipeEntryForm,
     ShoppingListForm,
     UNIT_CHOICES_WITH_EMPTY,
 )
-from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem
+from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem, ShoppingListRecipe
+from .services.shopping_lists import (
+    add_recipe_to_shopping_list,
+    exclude_recipe_contributions_for_item,
+    remove_recipe_entry,
+    update_recipe_entry,
+)
 
 
 def _extract_ingredient_filters(source):
@@ -85,7 +91,39 @@ def _shopping_items_grouped_by_category(shopping_list):
             grouped[label] = []
         grouped[label].append(item)
 
-    return [{'label': label, 'entries': grouped_items} for label, grouped_items in grouped.items()]
+    groups = []
+    for label, grouped_items in grouped.items():
+        checked_count = sum(1 for item in grouped_items if item.checked)
+        total_count = len(grouped_items)
+        groups.append(
+            {
+                'label': label,
+                'entries': grouped_items,
+                'checked_count': checked_count,
+                'total_count': total_count,
+                'remaining_count': total_count - checked_count,
+                'is_complete': total_count > 0 and checked_count == total_count,
+            }
+        )
+
+    return groups
+
+
+def _shopping_list_progress(item_groups):
+    total_count = sum(group['total_count'] for group in item_groups)
+    checked_count = sum(group['checked_count'] for group in item_groups)
+    remaining_count = total_count - checked_count
+    percent = 0
+    if total_count:
+        percent = int((checked_count / total_count) * 100)
+
+    return {
+        'total_count': total_count,
+        'checked_count': checked_count,
+        'remaining_count': remaining_count,
+        'percent': percent,
+        'is_complete': total_count > 0 and remaining_count == 0,
+    }
 
 
 def register(request):
@@ -371,12 +409,12 @@ def shopping_list_detail(request, list_id):
                 shopping_list=shopping_list,
                 ingredient=ingredient_ref,
                 unit=unit,
-                per_person_quantity__isnull=True,
             ).first()
 
             if existing:
                 existing.quantity = (existing.quantity + quantity).quantize(Decimal('0.01'))
-                existing.save(update_fields=['quantity'])
+                existing.per_person_quantity = None
+                existing.save(update_fields=['quantity', 'per_person_quantity'])
                 messages.success(request, 'Ingrédient déjà présent: quantité mise à jour.')
             else:
                 ShoppingListItem.objects.create(
@@ -403,10 +441,13 @@ def shopping_list_detail(request, list_id):
     ingredient_categories = IngredientCategory.objects.all().order_by('name')
     ingredient_query, selected_category = _extract_ingredient_filters(request.GET)
     ingredients, selected_category = _filter_ingredients(ingredient_query, selected_category)
+    item_groups = _shopping_items_grouped_by_category(shopping_list)
 
     context = {
         'shopping_list': shopping_list,
-        'item_groups': _shopping_items_grouped_by_category(shopping_list),
+        'item_groups': item_groups,
+        'item_progress': _shopping_list_progress(item_groups),
+        'recipe_entries': shopping_list.recipe_entries.prefetch_related('ingredients', 'recipe'),
         'ingredients': ingredients,
         'ingredient_categories': ingredient_categories,
         'ingredient_query': ingredient_query,
@@ -431,7 +472,6 @@ def shopping_list_add_recipes(request, list_id):
     form = AddRecipesForm(
         request.POST or None,
         recipes=recipes,
-        default_people=shopping_list.people_count,
     )
 
     if request.method == 'POST' and form.is_valid():
@@ -439,36 +479,8 @@ def shopping_list_add_recipes(request, list_id):
         if not selected:
             form.add_error(None, 'Sélectionnez au moins une recette.')
         else:
-            list_people = max(shopping_list.people_count, 1)
-            for recipe, people in selected:
-                ratio = Decimal(people) / Decimal(list_people)
-                for recipe_ingredient in recipe.ingredients.all():
-                    per_person = (recipe_ingredient.quantity_per_person * ratio).quantize(Decimal('0.0001'))
-                    existing = ShoppingListItem.objects.filter(
-                        shopping_list=shopping_list,
-                        ingredient=recipe_ingredient.ingredient,
-                        unit=recipe_ingredient.unit,
-                        per_person_quantity__isnull=False,
-                    ).first()
-                    if existing:
-                        existing.per_person_quantity = (existing.per_person_quantity + per_person).quantize(
-                            Decimal('0.0001')
-                        )
-                        existing.quantity = (Decimal(list_people) * existing.per_person_quantity).quantize(
-                            Decimal('0.01')
-                        )
-                        existing.name = recipe_ingredient.ingredient.name
-                        existing.save(update_fields=['per_person_quantity', 'quantity', 'name'])
-                    else:
-                        quantity = (Decimal(list_people) * per_person).quantize(Decimal('0.01'))
-                        ShoppingListItem.objects.create(
-                            shopping_list=shopping_list,
-                            ingredient=recipe_ingredient.ingredient,
-                            name=recipe_ingredient.ingredient.name,
-                            unit=recipe_ingredient.unit,
-                            quantity=quantity,
-                            per_person_quantity=per_person,
-                        )
+            for recipe, people, included_ids in selected:
+                add_recipe_to_shopping_list(shopping_list, recipe, people, included_ids)
             messages.success(request, 'Recettes ajoutées à la liste.')
             return redirect('shopping_list_detail', list_id=shopping_list.id)
 
@@ -485,26 +497,54 @@ def shopping_list_add_recipes(request, list_id):
 @login_required
 def shopping_list_update_people(request, list_id):
     shopping_list = _get_list_for_user(list_id)
+    messages.info(request, "Le nombre de personnes se choisit maintenant lors de l'ajout des recettes.")
+    return redirect('shopping_list_detail', list_id=shopping_list.id)
+
+
+@login_required
+def shopping_list_recipe_update(request, list_id, entry_id):
+    shopping_list = _get_list_for_user(list_id)
+    recipe_entry = get_object_or_404(ShoppingListRecipe, id=entry_id, shopping_list=shopping_list)
+
     if shopping_list.is_closed:
-        messages.warning(request, 'La liste est clôturée, impossible de modifier le nombre de personnes.')
+        messages.warning(request, 'La liste est clôturée, impossible de modifier une recette.')
         return redirect('shopping_list_detail', list_id=shopping_list.id)
 
-    form = PeopleCountForm(request.POST or None, instance=shopping_list)
+    form = ShoppingListRecipeEntryForm(request.POST or None, recipe_entry=recipe_entry)
     if request.method == 'POST' and form.is_valid():
-        form.save()
-        for item in shopping_list.items.filter(per_person_quantity__isnull=False):
-            item.recalculate()
-        messages.success(request, 'Nombre de personnes mis à jour.')
+        update_recipe_entry(
+            recipe_entry,
+            form.cleaned_data['people_count'],
+            form.included_ingredient_ids(),
+        )
+        messages.success(request, 'Recette mise à jour dans la liste.')
         return redirect('shopping_list_detail', list_id=shopping_list.id)
 
     return render(
         request,
-        'core/shopping_list_people.html',
+        'core/shopping_list_recipe_form.html',
         {
             'shopping_list': shopping_list,
+            'recipe_entry': recipe_entry,
             'form': form,
         },
     )
+
+
+@login_required
+def shopping_list_recipe_remove(request, list_id, entry_id):
+    shopping_list = _get_list_for_user(list_id)
+    recipe_entry = get_object_or_404(ShoppingListRecipe, id=entry_id, shopping_list=shopping_list)
+
+    if request.method == 'POST':
+        if shopping_list.is_closed:
+            messages.warning(request, 'La liste est clôturée, impossible de retirer une recette.')
+            return redirect('shopping_list_detail', list_id=shopping_list.id)
+
+        remove_recipe_entry(recipe_entry)
+        messages.success(request, 'Recette retirée de la liste.')
+
+    return redirect('shopping_list_detail', list_id=shopping_list.id)
 
 
 @login_required
@@ -530,6 +570,7 @@ def shopping_list_remove_item(request, list_id, item_id):
         if shopping_list.is_closed:
             messages.warning(request, 'La liste est clôturée, impossible de supprimer des éléments.')
             return redirect('shopping_list_detail', list_id=shopping_list.id)
+        exclude_recipe_contributions_for_item(item)
         item.delete()
         messages.success(request, 'Ingrédient supprimé de la liste.')
     return redirect('shopping_list_detail', list_id=shopping_list.id)

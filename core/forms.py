@@ -94,10 +94,9 @@ class RecipeIngredientQuickAddForm(forms.Form):
 class ShoppingListForm(forms.ModelForm):
     class Meta:
         model = ShoppingList
-        fields = ['name', 'people_count']
+        fields = ['name']
         widgets = {
             'name': forms.TextInput(attrs={'placeholder': 'Ex: Courses semaine'}),
-            'people_count': forms.NumberInput(attrs={'min': 1}),
         }
 
 
@@ -115,16 +114,45 @@ class AddRecipesForm(forms.Form):
                 initial=self.default_people,
                 widget=forms.NumberInput(attrs={'min': 1, 'class': 'compact'}),
             )
+            for recipe_ingredient in recipe.ingredients.all():
+                self.fields[f'include_{recipe.id}_{recipe_ingredient.id}'] = forms.BooleanField(
+                    required=False,
+                    initial=True,
+                )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        for recipe in self.recipes:
+            if not cleaned_data.get(f'select_{recipe.id}'):
+                continue
+
+            has_included_ingredient = any(
+                cleaned_data.get(f'include_{recipe.id}_{recipe_ingredient.id}')
+                for recipe_ingredient in recipe.ingredients.all()
+            )
+            if not has_included_ingredient:
+                raise ValidationError(f"Sélectionnez au moins un ingrédient pour {recipe.name}.")
+
+        return cleaned_data
 
     @property
     def recipe_rows(self):
         rows = []
         for recipe in self.recipes:
+            ingredients = []
+            for recipe_ingredient in recipe.ingredients.all():
+                ingredients.append(
+                    {
+                        'ingredient': recipe_ingredient,
+                        'include': self[f'include_{recipe.id}_{recipe_ingredient.id}'],
+                    }
+                )
             rows.append(
                 {
                     'recipe': recipe,
                     'select': self[f'select_{recipe.id}'],
                     'people': self[f'people_{recipe.id}'],
+                    'ingredients': ingredients,
                 }
             )
         return rows
@@ -134,8 +162,62 @@ class AddRecipesForm(forms.Form):
         for recipe in self.recipes:
             if self.cleaned_data.get(f'select_{recipe.id}'):
                 people = self.cleaned_data.get(f'people_{recipe.id}') or self.default_people
-                selected.append((recipe, int(people)))
+                included_ids = [
+                    recipe_ingredient.id
+                    for recipe_ingredient in recipe.ingredients.all()
+                    if self.cleaned_data.get(f'include_{recipe.id}_{recipe_ingredient.id}')
+                ]
+                selected.append((recipe, int(people), included_ids))
         return selected
+
+
+class ShoppingListRecipeEntryForm(forms.Form):
+    people_count = forms.IntegerField(
+        min_value=1,
+        label='Personnes',
+        widget=forms.NumberInput(attrs={'min': 1, 'class': 'compact'}),
+    )
+
+    def __init__(self, *args, recipe_entry=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.recipe_entry = recipe_entry
+        self.entry_ingredients = list(recipe_entry.ingredients.select_related('ingredient')) if recipe_entry else []
+
+        if recipe_entry:
+            self.fields['people_count'].initial = recipe_entry.people_count
+
+        for entry_ingredient in self.entry_ingredients:
+            self.fields[f'include_{entry_ingredient.id}'] = forms.BooleanField(
+                required=False,
+                initial=entry_ingredient.is_included,
+            )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if self.entry_ingredients and not any(
+            cleaned_data.get(f'include_{entry_ingredient.id}') for entry_ingredient in self.entry_ingredients
+        ):
+            raise ValidationError('Sélectionnez au moins un ingrédient.')
+        return cleaned_data
+
+    @property
+    def ingredient_rows(self):
+        rows = []
+        for entry_ingredient in self.entry_ingredients:
+            rows.append(
+                {
+                    'ingredient': entry_ingredient,
+                    'include': self[f'include_{entry_ingredient.id}'],
+                }
+            )
+        return rows
+
+    def included_ingredient_ids(self):
+        return [
+            entry_ingredient.id
+            for entry_ingredient in self.entry_ingredients
+            if self.cleaned_data.get(f'include_{entry_ingredient.id}')
+        ]
 
 
 class ManualItemQuickAddForm(forms.Form):
@@ -154,12 +236,3 @@ class ManualItemQuickAddForm(forms.Form):
         if ingredient is None:
             raise ValidationError('Ingrédient introuvable.')
         return ingredient
-
-
-class PeopleCountForm(forms.ModelForm):
-    class Meta:
-        model = ShoppingList
-        fields = ['people_count']
-        widgets = {
-            'people_count': forms.NumberInput(attrs={'min': 1}),
-        }

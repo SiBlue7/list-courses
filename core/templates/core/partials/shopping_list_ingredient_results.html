@@ -1,7 +1,7 @@
 ﻿<h3>Résultats ({{ ingredients|length }})</h3>
 {% if ingredients %}
     {% for ingredient in ingredients %}
-        <div class="list-item">
+        <div class="list-item ingredient-result-item">
             <div>
                 <strong>{{ ingredient.name }}</strong>
                 <div class="small muted">
@@ -12,21 +12,25 @@
                     {% endif %}
                 </div>
             </div>
-            <form method="post" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <form method="post" class="ingredient-result-form">
                 {% csrf_token %}
                 <input type="hidden" name="ingredient_id" value="{{ ingredient.id }}" />
                 <input type="hidden" name="q" value="{{ ingredient_query }}" />
                 <input type="hidden" name="category" value="{{ selected_category }}" />
 
-                <label class="small" for="qty_list_{{ ingredient.id }}">Qté</label>
-                <input id="qty_list_{{ ingredient.id }}" type="number" step="0.01" min="0.01" name="quantity" required />
+                <div class="ingredient-result-field ingredient-result-quantity">
+                    <label class="small" for="qty_list_{{ ingredient.id }}">Qté</label>
+                    <input id="qty_list_{{ ingredient.id }}" type="number" step="0.01" min="0.01" name="quantity" required />
+                </div>
 
-                <label class="small" for="unit_list_{{ ingredient.id }}">Unité</label>
-                <select id="unit_list_{{ ingredient.id }}" name="unit">
-                    {% for unit_value, unit_label in unit_choices %}
-                        <option value="{{ unit_value }}">{{ unit_label }}</option>
-                    {% endfor %}
-                </select>
+                <div class="ingredient-result-field ingredient-result-unit">
+                    <label class="small" for="unit_list_{{ ingredient.id }}">Unité</label>
+                    <select id="unit_list_{{ ingredient.id }}" name="unit">
+                        {% for unit_value, unit_label in unit_choices %}
+                            <option value="{{ unit_value }}">{{ unit_label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
 
                 <button class="btn primary" type="submit">Ajouter</button>
             </form>

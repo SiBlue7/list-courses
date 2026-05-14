@@ -46,3 +46,7 @@ Thumbs.db
 # Backups
 *.sql
 backups/
+
+# Local agent instructions/playbooks
+AGENTS.md
+Codex/

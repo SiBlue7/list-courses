@@ -98,6 +98,71 @@ class ShoppingList(models.Model):
         self.save(update_fields=['is_closed', 'closed_at'])
 
 
+class ShoppingListRecipe(models.Model):
+    shopping_list = models.ForeignKey(ShoppingList, on_delete=models.CASCADE, related_name='recipe_entries')
+    recipe = models.ForeignKey(
+        Recipe,
+        on_delete=models.SET_NULL,
+        related_name='shopping_list_entries',
+        null=True,
+        blank=True,
+    )
+    recipe_name = models.CharField(max_length=200)
+    people_count = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+
+    def __str__(self):
+        return f"{self.recipe_name} ({self.people_count} personne(s))"
+
+    @property
+    def display_name(self):
+        if self.recipe:
+            return self.recipe.name
+        return self.recipe_name
+
+
+class ShoppingListRecipeIngredient(models.Model):
+    shopping_list_recipe = models.ForeignKey(
+        ShoppingListRecipe,
+        on_delete=models.CASCADE,
+        related_name='ingredients',
+    )
+    ingredient = models.ForeignKey(
+        Ingredient,
+        on_delete=models.SET_NULL,
+        related_name='shopping_list_recipe_usages',
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=200)
+    unit = models.CharField(max_length=30, blank=True, choices=UNIT_CHOICES)
+    quantity_per_person = models.DecimalField(max_digits=8, decimal_places=2)
+    is_included = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['name', 'id']
+
+    def __str__(self):
+        unit_label = self.get_unit_display()
+        unit = f" {unit_label}" if unit_label else ''
+        return f"{self.display_name} ({self.quantity_per_person}{unit} / personne)"
+
+    @property
+    def display_name(self):
+        if self.ingredient:
+            return self.ingredient.name
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if self.ingredient:
+            self.name = self.ingredient.name
+        super().save(*args, **kwargs)
+
+
 class ShoppingListItem(models.Model):
     shopping_list = models.ForeignKey(ShoppingList, on_delete=models.CASCADE, related_name='items')
     ingredient = models.ForeignKey(

@@ -1,0 +1,38 @@
+{% extends 'core/base.html' %}
+{% block title %}Modifier une recette{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>Modifier {{ recipe_entry.display_name }}</h1>
+    <p class="muted">Ajustez les personnes et les ingrédients à garder dans la liste.</p>
+    <form method="post">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+            <div class="message error">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        <p>
+            {{ form.people_count.label_tag }}
+            {{ form.people_count }}
+        </p>
+
+        <h2>Ingrédients</h2>
+        {% for row in form.ingredient_rows %}
+            <label class="list-item" style="justify-content: flex-start; gap: 10px; cursor: pointer;">
+                {{ row.include }}
+                <span>
+                    <strong>{{ row.ingredient.display_name }}</strong>
+                    <span class="small muted">
+                        {{ row.ingredient.quantity_per_person }}
+                        {{ row.ingredient.get_unit_display }}/pers.
+                    </span>
+                </span>
+            </label>
+        {% endfor %}
+
+        <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
+            <button class="btn primary" type="submit">Enregistrer</button>
+            <a class="btn" href="{% url 'shopping_list_detail' shopping_list.id %}">Annuler</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

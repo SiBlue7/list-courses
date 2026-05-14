@@ -3,14 +3,12 @@
 {% block content %}
 <div class="card">
     <h1>{{ shopping_list.name }}</h1>
-    <p class="muted">{{ shopping_list.people_count }} personne(s)</p>
     <p class="small muted">Partagée avec tous les utilisateurs.</p>
     {% if shopping_list.is_closed %}
         <p class="badge">Liste clôturée</p>
     {% endif %}
     <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
         <a class="btn" href="{% url 'shopping_list_add_recipes' shopping_list.id %}">Ajouter des recettes</a>
-        <a class="btn" href="{% url 'shopping_list_update_people' shopping_list.id %}">Modifier personnes</a>
         <a class="btn" href="{% url 'ingredient_list' %}">Gérer les ingrédients</a>
         {% if not shopping_list.is_closed %}
             <a class="btn danger" href="{% url 'shopping_list_close' shopping_list.id %}">Clôturer</a>
@@ -18,33 +16,86 @@
     </div>
 </div>
 
+{% if recipe_entries %}
 <div class="card">
-    <h2>Liste de courses</h2>
+    <h2>Recettes ajoutées</h2>
+    {% for recipe_entry in recipe_entries %}
+        <div class="list-item">
+            <div>
+                <strong>{{ recipe_entry.display_name }}</strong>
+                <div class="small muted">{{ recipe_entry.people_count }} personne(s) · {{ recipe_entry.ingredients.all|length }} ingrédient(s)</div>
+            </div>
+            {% if not shopping_list.is_closed %}
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <a class="btn" href="{% url 'shopping_list_recipe_update' shopping_list.id recipe_entry.id %}">Modifier</a>
+                    <form method="post" action="{% url 'shopping_list_recipe_remove' shopping_list.id recipe_entry.id %}" onsubmit="return confirm('Retirer cette recette de la liste ?');">
+                        {% csrf_token %}
+                        <button class="btn danger" type="submit">Retirer</button>
+                    </form>
+                </div>
+            {% endif %}
+        </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="shopping-list-heading">
+        <div>
+            <h2>Liste de courses</h2>
+            {% if item_progress.total_count %}
+                <p class="small muted">
+                    {{ item_progress.checked_count }}/{{ item_progress.total_count }} article(s) coché(s)
+                    · {{ item_progress.remaining_count }} restant(s)
+                </p>
+            {% endif %}
+        </div>
+        {% if item_progress.total_count %}
+            <div class="shopping-progress" aria-label="{{ item_progress.checked_count }} sur {{ item_progress.total_count }} articles cochés">
+                <span style="width: {{ item_progress.percent }}%;"></span>
+            </div>
+        {% endif %}
+    </div>
     {% if item_groups %}
         {% for group in item_groups %}
-            <details open style="margin-top: 14px;">
-                <summary style="cursor: pointer; font-weight: 700;">
-                    {{ group.label }} ({{ group.entries|length }})
+            <details open class="shopping-category{% if group.is_complete %} is-complete{% endif %}">
+                <summary>
+                    <span>{{ group.label }}</span>
+                    <span class="small muted">{{ group.checked_count }}/{{ group.total_count }}</span>
                 </summary>
-                <div style="margin-top: 8px;">
+                <div class="shopping-category-items">
                     {% for item in group.entries %}
-                        <div class="list-item">
-                            <div>
-                                <strong>{% if item.checked %}[OK] {% endif %}{{ item.display_name }}</strong>
-                                <div class="small muted">{{ item.quantity }} {{ item.get_unit_display }}</div>
-                            </div>
-                            <div style="display: flex; gap: 8px;">
+                        <div class="list-item shopping-item{% if item.checked %} is-checked{% endif %}">
+                            <div class="shopping-item-content">
                                 {% if not shopping_list.is_closed %}
-                                    <form method="post" action="{% url 'shopping_list_toggle_item' shopping_list.id item.id %}">
+                                    <form method="post" action="{% url 'shopping_list_toggle_item' shopping_list.id item.id %}" class="shopping-item-check-form">
                                         {% csrf_token %}
-                                        <button class="btn" type="submit">{% if item.checked %}Décocher{% else %}Cocher{% endif %}</button>
+                                        <input
+                                            id="shopping_item_{{ item.id }}"
+                                            class="shopping-item-checkbox"
+                                            type="checkbox"
+                                            aria-label="Marquer {{ item.display_name }} comme {% if item.checked %}non acheté{% else %}acheté{% endif %}"
+                                            {% if item.checked %}checked{% endif %}
+                                            onchange="this.form.requestSubmit()"
+                                        />
+                                        <noscript>
+                                            <button class="btn" type="submit">{% if item.checked %}Décocher{% else %}Cocher{% endif %}</button>
+                                        </noscript>
                                     </form>
-                                    <form method="post" action="{% url 'shopping_list_remove_item' shopping_list.id item.id %}">
-                                        {% csrf_token %}
-                                        <button class="btn" type="submit">Supprimer</button>
-                                    </form>
+                                {% else %}
+                                    <input id="shopping_item_{{ item.id }}" class="shopping-item-checkbox" type="checkbox" {% if item.checked %}checked{% endif %} disabled />
                                 {% endif %}
+                                <label class="shopping-item-label" for="shopping_item_{{ item.id }}">
+                                    <strong>{{ item.display_name }}</strong>
+                                    <span class="small muted">{{ item.quantity }} {{ item.get_unit_display }}</span>
+                                </label>
                             </div>
+                            {% if not shopping_list.is_closed %}
+                                <form method="post" action="{% url 'shopping_list_remove_item' shopping_list.id item.id %}">
+                                    {% csrf_token %}
+                                    <button class="btn secondary" type="submit">Retirer</button>
+                                </form>
+                            {% endif %}
                         </div>
                     {% endfor %}
                 </div>

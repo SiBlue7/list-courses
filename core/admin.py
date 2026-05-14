@@ -1,6 +1,15 @@
 ﻿from django.contrib import admin
 
-from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem
+from .models import (
+    Ingredient,
+    IngredientCategory,
+    Recipe,
+    RecipeIngredient,
+    ShoppingList,
+    ShoppingListItem,
+    ShoppingListRecipe,
+    ShoppingListRecipeIngredient,
+)
 
 
 @admin.register(IngredientCategory)
@@ -33,12 +42,19 @@ class ShoppingListItemInline(admin.TabularInline):
     extra = 0
 
 
+class ShoppingListRecipeInline(admin.TabularInline):
+    model = ShoppingListRecipe
+    extra = 0
+
+
 @admin.register(ShoppingList)
 class ShoppingListAdmin(admin.ModelAdmin):
     list_display = ('name', 'owner', 'people_count', 'is_closed', 'created_at', 'closed_at')
     list_filter = ('is_closed',)
-    inlines = [ShoppingListItemInline]
+    inlines = [ShoppingListRecipeInline, ShoppingListItemInline]
 
 
 admin.site.register(ShoppingListItem)
 admin.site.register(RecipeIngredient)
+admin.site.register(ShoppingListRecipe)
+admin.site.register(ShoppingListRecipeIngredient)

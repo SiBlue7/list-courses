@@ -3,7 +3,7 @@
 {% block content %}
 <div class="card">
     <h1>Ajouter des recettes</h1>
-    <p class="muted">Par défaut, le nombre de personnes est {{ shopping_list.people_count }}.</p>
+    <p class="muted">Choisissez le nombre de personnes pour chaque recette.</p>
     <form method="post">
         {% csrf_token %}
         {% if form.non_field_errors %}
@@ -16,6 +16,20 @@
                     <div>
                         <strong>{{ row.recipe.name }}</strong>
                         <div class="small muted">{{ row.recipe.ingredients.count }} ingrédient(s)</div>
+                        {% if row.ingredients %}
+                            <div style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
+                                {% for ingredient_row in row.ingredients %}
+                                    <label class="small" style="display: inline-flex; gap: 6px; align-items: center; margin: 0;">
+                                        {{ ingredient_row.include }}
+                                        <span>{{ ingredient_row.ingredient.display_name }}</span>
+                                        <span class="muted">
+                                            {{ ingredient_row.ingredient.quantity_per_person }}
+                                            {{ ingredient_row.ingredient.get_unit_display }}/pers.
+                                        </span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
                     </div>
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                         <label class="small">Choisir</label>
