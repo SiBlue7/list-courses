@@ -84,7 +84,9 @@ def add_recipe_to_shopping_list(shopping_list, recipe, people_count, included_re
 @transaction.atomic
 def update_recipe_entry(recipe_entry, people_count, included_entry_ingredient_ids):
     recipe_entry = ShoppingListRecipe.objects.select_for_update().get(pk=recipe_entry.pk)
-    entry_ingredients = list(recipe_entry.ingredients.select_for_update().select_related('ingredient'))
+    # Keep row locking on recipe ingredients only; PostgreSQL rejects FOR UPDATE
+    # on the nullable side of the select_related('ingredient') outer join.
+    entry_ingredients = list(recipe_entry.ingredients.select_for_update())
     included_ids = {int(ingredient_id) for ingredient_id in included_entry_ingredient_ids}
     old_people_count = recipe_entry.people_count
 
@@ -121,7 +123,7 @@ def update_recipe_entry(recipe_entry, people_count, included_entry_ingredient_id
 @transaction.atomic
 def remove_recipe_entry(recipe_entry):
     recipe_entry = ShoppingListRecipe.objects.select_for_update().get(pk=recipe_entry.pk)
-    entry_ingredients = list(recipe_entry.ingredients.select_for_update().select_related('ingredient'))
+    entry_ingredients = list(recipe_entry.ingredients.select_for_update())
 
     for entry_ingredient in entry_ingredients:
         if not entry_ingredient.is_included:
