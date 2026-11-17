@@ -239,6 +239,16 @@ Pour remplacer le secret, modifier les deux configurations et recréer les servi
 
 [Contrat JSON et prompt pour l’agent HomeHub](HOMEHUB_PROMPT.md)
 
+Le même jeton permet de rechercher les ingrédients avec `GET /api/ingredients/`
+et d’ajouter un ingrédient à la liste active avec
+`POST /api/lists/<id>/items/`. La migration
+`0006_homehubitemaddition` enregistre les demandes d’ajout réussies pour
+éviter les doublons lors d’une nouvelle tentative. Docker Compose applique
+cette migration au démarrage du service `web`. Pour un déploiement hors
+Docker, lancer `python manage.py migrate`.
+
+[Contrat des ajouts et prompt pour HomeHub](HOMEHUB_INGREDIENTS_PROMPT.md)
+
 ## 🆘 Dépannage
 
 ### Erreur "python.exe introuvable"

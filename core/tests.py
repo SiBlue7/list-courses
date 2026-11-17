@@ -1,10 +1,17 @@
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Barrier
+from uuid import uuid4
 
 from django.contrib.auth.models import User
-from django.test import TestCase, override_settings
+from django.db import close_old_connections, connections
+from django.test import Client, TestCase, TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.urls import reverse
 
-from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem, ShoppingListRecipe
+from .models import (
+    HomeHubItemAddition, Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList,
+    ShoppingListItem, ShoppingListRecipe,
+)
 
 
 @override_settings(HOMEHUB_API_TOKEN='test-homehub-token')
@@ -89,6 +96,160 @@ class ActiveShoppingListApiTests(TestCase):
 
         self.assertEqual(response.status_code, 405)
         self.assertEqual(response.headers['Allow'], 'GET')
+
+
+@override_settings(HOMEHUB_API_TOKEN='test-homehub-token')
+class HomeHubIngredientTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='owner')
+        self.shopping_list = ShoppingList.objects.create(name='Courses', owner=self.user)
+        self.ingredient = Ingredient.objects.create(name='Riz')
+        self.headers = {'Authorization': 'Bearer test-homehub-token'}
+        self.client = Client(enforce_csrf_checks=True)
+        self.payload = {'ingredient_id': self.ingredient.pk, 'quantity': '2.50', 'unit': 'g'}
+
+    def post_item(self, key, payload=None, list_id=None, headers=None):
+        return self.client.post(
+            reverse('api_add_shopping_item', args=[list_id or self.shopping_list.pk]),
+            data=self.payload if payload is None else payload,
+            content_type='application/json',
+            headers={'Idempotency-Key': str(key), **(self.headers if headers is None else headers)},
+        )
+
+    def test_search_paginates_matches_and_returns_allowed_units(self):
+        Ingredient.objects.bulk_create([Ingredient(name=f'Riz {index:02}') for index in range(30)])
+        Ingredient.objects.create(name='Pain')
+        url = reverse('api_ingredients')
+        self.assertEqual(self.client.get(url).status_code, 401)
+
+        first = self.client.get(url, {'q': ' riZ '}, headers=self.headers).json()
+        second = self.client.get(url, {'q': 'riZ', 'page': first['next_page']}, headers=self.headers).json()
+
+        self.assertEqual(first['ingredients'][0], {'id': self.ingredient.pk, 'name': 'Riz'})
+        self.assertEqual(len(first['ingredients']), 30)
+        self.assertEqual(second['ingredients'][0]['name'], 'Riz 29')
+        self.assertIsNone(second['next_page'])
+        self.assertIn({'code': '', 'label': 'Sans unité'}, first['units'])
+        self.assertEqual(self.client.get(url, {'page': 3}, headers=self.headers).status_code, 400)
+
+    def test_addition_requires_token_and_leaves_site_csrf_in_place(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.post_item(uuid4(), headers={}).status_code, 401)
+        self.assertEqual(self.post_item(uuid4(), headers={'Authorization': 'Bearer wrong'}).status_code, 401)
+        site = reverse('shopping_list_detail', args=[self.shopping_list.pk])
+        self.assertEqual(self.client.post(site, self.payload).status_code, 403)
+        self.assertFalse(ShoppingListItem.objects.exists())
+
+    def test_merges_with_site_additions_and_preserves_checked_status(self):
+        site = reverse('shopping_list_detail', args=[self.shopping_list.pk])
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.post(site, self.payload).status_code, 302)
+        item = ShoppingListItem.objects.get()
+        item.checked = True
+        item.save(update_fields=['checked'])
+
+        result = self.post_item(uuid4())
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json(), {'list_id': self.shopping_list.pk})
+        self.assertEqual(self.post_item(uuid4(), {**self.payload, 'unit': ''}).status_code, 200)
+        item.refresh_from_db()
+        self.assertEqual(item.quantity, Decimal('5.00'))
+        self.assertTrue(item.checked)
+        self.assertEqual(ShoppingListItem.objects.count(), 2)
+
+    def test_replays_success_after_list_closes_and_rejects_key_conflicts(self):
+        key = uuid4()
+        self.assertEqual(self.post_item(key).status_code, 200)
+        self.shopping_list.close()
+        self.assertEqual(self.post_item(uuid4()).json(), {'error': 'active_list_changed'})
+        replacement = ShoppingList.objects.create(name='Autres courses', owner=self.user)
+
+        self.assertEqual(self.post_item(key).status_code, 200)
+        for result in (
+            self.post_item(key, {**self.payload, 'quantity': '4.00'}),
+            self.post_item(key, list_id=replacement.pk),
+        ):
+            self.assertEqual(result.status_code, 409)
+            self.assertEqual(result.json(), {'error': 'idempotency_conflict'})
+        stale = self.post_item(uuid4())
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json(), {'error': 'active_list_changed'})
+        self.assertEqual(ShoppingListItem.objects.get().quantity, Decimal('2.50'))
+
+    def test_rejects_replaced_open_list_without_consuming_the_key(self):
+        replacement = ShoppingList.objects.create(name='Autres courses', owner=self.user)
+        key = uuid4()
+        self.assertEqual(self.post_item(key).json(), {'error': 'active_list_changed'})
+        self.assertFalse(HomeHubItemAddition.objects.exists())
+        self.assertEqual(self.post_item(key, list_id=replacement.pk).status_code, 200)
+        self.assertEqual(ShoppingListItem.objects.get().shopping_list, replacement)
+
+    def test_rejects_invalid_requests_without_recording_an_addition(self):
+        self.assertEqual(self.post_item('invalid').json(), {'error': 'invalid_idempotency_key'})
+        self.assertEqual(self.post_item(uuid4(), '{').json(), {'error': 'invalid_json'})
+        self.assertEqual(self.post_item(uuid4(), {**self.payload, 'quantity': 2}).json(), {'error': 'invalid_payload'})
+        for field, value in (
+            ('quantity', '0'), ('quantity', '0.001'), ('quantity', '100000000.00'),
+            ('ingredient_id', self.ingredient.pk + 1), ('unit', 'invalid'),
+        ):
+            with self.subTest(field=field, value=value):
+                response = self.post_item(uuid4(), {**self.payload, field: value})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(field, response.json()['fields'])
+        self.assertFalse(HomeHubItemAddition.objects.exists())
+        self.assertFalse(ShoppingListItem.objects.exists())
+
+    def test_rejects_total_overflow_and_rolls_back_the_receipt(self):
+        item = ShoppingListItem.objects.create(
+            shopping_list=self.shopping_list, ingredient=self.ingredient, name='Riz',
+            unit='g', quantity=Decimal('99999999.99'),
+        )
+
+        response = self.post_item(uuid4())
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('quantity', response.json()['fields'])
+        item.refresh_from_db()
+        self.assertEqual(item.quantity, Decimal('99999999.99'))
+        self.assertFalse(HomeHubItemAddition.objects.exists())
+
+
+@override_settings(HOMEHUB_API_TOKEN='test-homehub-token')
+class HomeHubIngredientConcurrencyTests(TransactionTestCase):
+    @skipUnlessDBFeature('has_select_for_no_key_update')
+    def test_concurrent_retries_and_distinct_additions_merge_into_one_row(self):
+        owner = User.objects.create_user(username='owner')
+        shopping_list = ShoppingList.objects.create(name='Courses', owner=owner)
+        ingredient = Ingredient.objects.create(name='Riz')
+        url = reverse('api_add_shopping_item', args=[shopping_list.pk])
+        site_url = reverse('shopping_list_detail', args=[shopping_list.pk])
+        payload = {'ingredient_id': ingredient.pk, 'quantity': '2.50', 'unit': 'g'}
+        barrier = Barrier(4, timeout=10)
+
+        def add_item(key):
+            close_old_connections()
+            try:
+                client = Client()
+                if key is None:
+                    client.force_login(owner)
+                barrier.wait()
+                if key is None:
+                    return client.post(site_url, data=payload).status_code
+                return client.post(
+                    url,
+                    data=payload,
+                    content_type='application/json',
+                    headers={'Authorization': 'Bearer test-homehub-token', 'Idempotency-Key': str(key)},
+                ).status_code
+            finally:
+                connections.close_all()
+
+        repeated_key = uuid4()
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            statuses = list(pool.map(add_item, [repeated_key, repeated_key, uuid4(), None]))
+        self.assertEqual(statuses, [200, 200, 200, 302])
+        self.assertEqual(ShoppingListItem.objects.get().quantity, Decimal('7.50'))
+        self.assertEqual(HomeHubItemAddition.objects.count(), 2)
 
 
 class ShoppingListRecipeQuantityTests(TestCase):

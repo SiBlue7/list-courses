@@ -1,8 +1,18 @@
 from decimal import Decimal
+from hashlib import sha256
+import json
 
-from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, connection, transaction
 
-from core.models import ShoppingList, ShoppingListItem, ShoppingListRecipe, ShoppingListRecipeIngredient
+from core.forms import ManualItemQuickAddForm
+from core.models import (
+    HomeHubItemAddition,
+    ShoppingList,
+    ShoppingListItem,
+    ShoppingListRecipe,
+    ShoppingListRecipeIngredient,
+)
 
 
 DISPLAY_QUANTITY = Decimal('0.01')
@@ -10,6 +20,79 @@ DISPLAY_QUANTITY = Decimal('0.01')
 
 def open_shopping_lists():
     return ShoppingList.objects.filter(is_closed=False).order_by('-created_at', '-id')
+
+
+class ActiveListChanged(Exception):
+    pass
+
+
+class IdempotencyConflict(Exception):
+    pass
+
+
+def _lock_shopping_list(list_id):
+    return ShoppingList.objects.select_for_update(
+        no_key=connection.features.has_select_for_no_key_update,
+    ).get(pk=list_id)
+
+
+@transaction.atomic
+def add_manual_item(shopping_list, ingredient, quantity, unit):
+    shopping_list = _lock_shopping_list(shopping_list.pk)
+    if shopping_list.is_closed:
+        raise ActiveListChanged
+
+    item = _find_shopping_item(shopping_list, ingredient, ingredient.name, unit)
+    if item is None:
+        ShoppingListItem.objects.create(
+            shopping_list=shopping_list, ingredient=ingredient, name=ingredient.name,
+            quantity=quantity, unit=unit,
+        )
+        return True
+
+    total = (item.quantity + quantity).quantize(DISPLAY_QUANTITY)
+    try:
+        ShoppingListItem._meta.get_field('quantity').run_validators(total)
+    except ValidationError as error:
+        raise ValidationError({'quantity': error}) from error
+    item.quantity = total
+    item.per_person_quantity = None
+    item.save(update_fields=['quantity', 'per_person_quantity'])
+    return False
+
+
+@transaction.atomic
+def add_homehub_item(list_id, key, payload):
+    request_data = json.dumps([list_id, payload], sort_keys=True, separators=(',', ':'))
+    digest = sha256(request_data.encode()).hexdigest()
+    try:
+        with transaction.atomic():
+            HomeHubItemAddition.objects.create(key=key, request_digest=digest)
+    except IntegrityError:
+        receipt = HomeHubItemAddition.objects.get(pk=key)
+        if receipt.request_digest != digest:
+            raise IdempotencyConflict
+        return
+
+    if connection.vendor == 'postgresql':
+        # Keep list creation and closure from changing the active list until commit.
+        with connection.cursor() as cursor:
+            table = connection.ops.quote_name(ShoppingList._meta.db_table)
+            cursor.execute(f'LOCK TABLE {table} IN SHARE MODE')
+
+    active_list = open_shopping_lists().first()
+    if active_list is None or active_list.pk != list_id:
+        raise ActiveListChanged
+
+    form = ManualItemQuickAddForm(payload)
+    if not form.is_valid():
+        raise ValidationError(form.errors.as_data())
+    add_manual_item(
+        active_list,
+        form.cleaned_data['ingredient_id'],
+        form.cleaned_data['quantity'],
+        form.cleaned_data['unit'],
+    )
 
 
 def _quantity_for_people(quantity_per_person, people_count):
@@ -58,6 +141,7 @@ def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
 
 @transaction.atomic
 def add_recipe_to_shopping_list(shopping_list, recipe, people_count, included_recipe_ingredient_ids):
+    _lock_shopping_list(shopping_list.pk)
     included_ids = {int(ingredient_id) for ingredient_id in included_recipe_ingredient_ids}
     recipe_entry = ShoppingListRecipe.objects.create(
         shopping_list=shopping_list,
@@ -87,6 +171,7 @@ def add_recipe_to_shopping_list(shopping_list, recipe, people_count, included_re
 
 @transaction.atomic
 def update_recipe_entry(recipe_entry, people_count, included_entry_ingredient_ids):
+    _lock_shopping_list(recipe_entry.shopping_list_id)
     recipe_entry = ShoppingListRecipe.objects.select_for_update().get(pk=recipe_entry.pk)
     # Keep row locking on recipe ingredients only; PostgreSQL rejects FOR UPDATE
     # on the nullable side of the select_related('ingredient') outer join.
@@ -126,6 +211,7 @@ def update_recipe_entry(recipe_entry, people_count, included_entry_ingredient_id
 
 @transaction.atomic
 def remove_recipe_entry(recipe_entry):
+    _lock_shopping_list(recipe_entry.shopping_list_id)
     recipe_entry = ShoppingListRecipe.objects.select_for_update().get(pk=recipe_entry.pk)
     entry_ingredients = list(recipe_entry.ingredients.select_for_update())
 
@@ -145,7 +231,9 @@ def remove_recipe_entry(recipe_entry):
     recipe_entry.delete()
 
 
-def exclude_recipe_contributions_for_item(item):
+@transaction.atomic
+def remove_shopping_item(item):
+    _lock_shopping_list(item.shopping_list_id)
     entry_ingredients = ShoppingListRecipeIngredient.objects.filter(
         shopping_list_recipe__shopping_list=item.shopping_list,
         is_included=True,
@@ -157,3 +245,4 @@ def exclude_recipe_contributions_for_item(item):
         entry_ingredients = entry_ingredients.filter(ingredient__isnull=True, name=item.name)
 
     entry_ingredients.update(is_included=False)
+    item.delete()

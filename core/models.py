@@ -204,3 +204,8 @@ class ShoppingListItem(models.Model):
         people = max(self.shopping_list.people_count, 1)
         self.quantity = (Decimal(people) * self.per_person_quantity).quantize(Decimal('0.01'))
         self.save(update_fields=['quantity'])
+
+
+class HomeHubItemAddition(models.Model):
+    key = models.UUIDField(primary_key=True, editable=False)
+    request_digest = models.CharField(max_length=64)
