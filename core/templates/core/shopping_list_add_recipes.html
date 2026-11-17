@@ -1,52 +1,245 @@
-﻿{% extends 'core/base.html' %}
+{% extends 'core/base.html' %}
 {% block title %}Ajouter des recettes{% endblock %}
 {% block content %}
-<div class="card">
-    <h1>Ajouter des recettes</h1>
-    <p class="muted">Choisissez le nombre de personnes pour chaque recette.</p>
-    <form method="post">
-        {% csrf_token %}
-        {% if form.non_field_errors %}
-            <div class="message">{{ form.non_field_errors }}</div>
-        {% endif %}
+<style>
+    .recipe-picker {
+        display: grid;
+        grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+        align-items: start;
+        gap: 1rem;
+    }
 
-        {% if form.recipe_rows %}
-            {% for row in form.recipe_rows %}
-                <div class="list-item">
-                    <div>
-                        <strong>{{ row.recipe.name }}</strong>
-                        <div class="small muted">{{ row.recipe.ingredients.count }} ingrédient(s)</div>
-                        {% if row.ingredients %}
-                            <div style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
-                                {% for ingredient_row in row.ingredients %}
-                                    <label class="small" style="display: inline-flex; gap: 6px; align-items: center; margin: 0;">
-                                        {{ ingredient_row.include }}
-                                        <span>{{ ingredient_row.ingredient.display_name }}</span>
-                                        <span class="muted">
-                                            {{ ingredient_row.ingredient.quantity_per_person }}
-                                            {{ ingredient_row.ingredient.get_unit_display }}/pers.
-                                        </span>
-                                    </label>
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                    </div>
-                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                        <label class="small">Choisir</label>
-                        {{ row.select }}
-                        <label class="small">Personnes</label>
-                        {{ row.people }}
+    .recipe-picker .card:hover {
+        transform: none;
+        box-shadow: var(--shadow-card);
+        border-color: var(--border-color);
+    }
+
+    .recipe-picker h2 { font-size: 1.4rem; margin-bottom: .8rem; }
+    .recipe-picker [hidden] { display: none; }
+    .recipe-picker-status { display: flex; justify-content: space-between; gap: .5rem; margin-top: .65rem; }
+    .recipe-picker-status p { margin: 0; }
+    .recipe-picker-jump { display: none; }
+    .recipe-picker-row { position: relative; border-bottom: 1px solid var(--border-color); }
+    .recipe-picker-row:last-child { border-bottom: 0; }
+    .recipe-picker-row summary { padding: .85rem 6.4rem .85rem 0; cursor: pointer; overflow-wrap: anywhere; }
+    .recipe-picker-row summary .small { display: block; padding-left: 1rem; }
+    .recipe-picker-choice {
+        position: absolute;
+        top: .5rem;
+        right: 0;
+        display: flex;
+        align-items: center;
+        gap: .35rem;
+        min-height: 44px;
+        padding: .25rem .5rem;
+        margin: 0;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-full);
+        cursor: pointer;
+    }
+
+    .recipe-picker-choice:has(input:checked) {
+        background: var(--accent-soft);
+        border-color: var(--accent-primary);
+        color: var(--accent-hover);
+    }
+
+    .recipe-picker-label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+
+    .recipe-picker-details { padding: 0 0 .7rem 1rem; }
+    .recipe-picker-people { display: flex; align-items: center; gap: .6rem; }
+    .recipe-picker-people input { width: 5.5rem; margin: 0; padding: .5rem; }
+    .recipe-picker-ingredient { display: flex; align-items: center; gap: .5rem; min-height: 44px; margin: 0; }
+    .recipe-picker-ingredient input { flex-shrink: 0; }
+    .recipe-picker-amount { margin-left: auto; text-align: right; }
+    .recipe-picker-selection ul { padding: 0; list-style: none; margin: 0 0 .75rem; }
+    .recipe-picker-selection li { display: flex; justify-content: space-between; align-items: center; gap: .5rem; padding: .5rem 0; border-bottom: 1px solid var(--border-color); }
+    .recipe-picker-selection li strong { overflow-wrap: anywhere; }
+    .recipe-picker-selection .btn { min-height: 44px; }
+    .recipe-picker-selection .btn:disabled { opacity: .55; cursor: default; transform: none; box-shadow: none; }
+    .recipe-picker-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+    @media (max-width: 650px) {
+        .recipe-picker { grid-template-columns: minmax(0, 1fr); }
+        .recipe-picker .card { padding: 1rem; }
+        .recipe-picker-jump { display: inline; }
+        #recipe-picker-selection { scroll-margin-top: 9rem; }
+    }
+</style>
+
+<h1>Ajouter des recettes</h1>
+<p class="muted">Choisis les plats à ajouter à ta liste de courses.</p>
+<form method="post" id="recipe-picker-form">
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+        <div class="message error" role="alert">{{ form.non_field_errors }}</div>
+    {% endif %}
+
+    <div class="recipe-picker">
+        <section class="card" aria-label="Catalogue des recettes">
+            {% with rows=form.recipe_rows %}
+            {% if rows %}
+                <div data-recipe-search hidden>
+                    <label for="recipe-picker-query">Rechercher une recette</label>
+                    <input id="recipe-picker-query" type="text" inputmode="search" placeholder="Ex. curry, lasagnes…" autocomplete="off">
+                    <div class="recipe-picker-status">
+                        <p class="small muted" data-recipe-count aria-live="polite"></p>
+                        <a class="small recipe-picker-jump" href="#recipe-picker-selection">Voir la sélection</a>
                     </div>
                 </div>
-            {% endfor %}
-        {% else %}
-            <p class="muted">Aucune recette disponible.</p>
-        {% endif %}
+                {% for row in rows %}
+                    <div class="recipe-picker-row" data-recipe-row data-default-people="{{ form.default_people }}">
+                        <details{% if row.select.value or row.people.errors %} open{% endif %}>
+                            <summary>
+                                <strong data-recipe-name>{{ row.recipe.name }}</strong>
+                                <span class="small muted">{{ row.ingredients|length }} ingrédient{{ row.ingredients|length|pluralize }}</span>
+                            </summary>
+                            <div class="recipe-picker-details">
+                                <label class="recipe-picker-people" for="{{ row.people.id_for_label }}">Personnes {{ row.people }}</label>
+                                {{ row.people.errors }}
+                                {% for ingredient_row in row.ingredients %}
+                                    <label class="recipe-picker-ingredient">
+                                        {{ ingredient_row.include }}
+                                        <span>{{ ingredient_row.ingredient.display_name }}</span>
+                                        <span class="small muted recipe-picker-amount">
+                                            {{ ingredient_row.ingredient.quantity_per_person }}
+                                            {{ ingredient_row.ingredient.get_unit_display }} / pers.
+                                        </span>
+                                    </label>
+                                {% empty %}
+                                    <p class="small muted">Aucun ingrédient dans cette recette.</p>
+                                {% endfor %}
+                            </div>
+                        </details>
+                        <label class="recipe-picker-choice">
+                            {{ row.select }}
+                            <span aria-hidden="true" data-recipe-choice>Choisir</span>
+                            <span class="recipe-picker-label">Choisir {{ row.recipe.name }}</span>
+                        </label>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p class="muted">Aucune recette disponible.</p>
+            {% endif %}
+            {% endwith %}
+        </section>
 
-        <div style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap;">
-            <button class="btn primary" type="submit">Ajouter à la liste</button>
-            <a class="btn" href="{% url 'shopping_list_detail' shopping_list.id %}">Retour</a>
-        </div>
-    </form>
-</div>
+        <section class="card recipe-picker-selection" id="recipe-picker-selection" aria-labelledby="recipe-selection-title">
+            <h2 id="recipe-selection-title">Ta sélection <span data-selection-count aria-live="polite"></span></h2>
+            <div data-selection-preview hidden>
+                <p class="small muted" data-selection-empty>Les recettes choisies apparaîtront ici.</p>
+                <ul data-selection-recipes></ul>
+            </div>
+            <div class="recipe-picker-actions">
+                <button class="btn primary" type="submit">Ajouter à la liste</button>
+                <a class="btn" href="{% url 'shopping_list_detail' shopping_list.id %}">Retour</a>
+            </div>
+        </section>
+    </div>
+</form>
+
+<script>
+    (() => {
+        const form = document.getElementById('recipe-picker-form');
+        const search = form.querySelector('#recipe-picker-query');
+        if (!search) return;
+
+        const selection = form.querySelector('[data-selection-recipes]');
+        const submit = form.querySelector('button[type="submit"]');
+        const normalize = (value) => value.toLocaleLowerCase('fr').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const rows = [...form.querySelectorAll('[data-recipe-row]')].map((row) => {
+            const name = row.querySelector('[data-recipe-name]').textContent.trim();
+            const checkbox = row.querySelector('.recipe-picker-choice input');
+            const details = row.querySelector('details');
+            checkbox.addEventListener('change', () => {
+                if (checkbox.checked) details.open = true;
+            });
+            return {
+                row, name, checkbox,
+                people: row.querySelector('input[type="number"]'),
+                choice: row.querySelector('[data-recipe-choice]'),
+                ingredients: [...details.querySelectorAll('input[type="checkbox"]')],
+            };
+        });
+
+        function filterRecipes() {
+            const query = normalize(search.value.trim());
+            let visible = 0;
+            for (const { row, name } of rows) {
+                row.hidden = !normalize(name).includes(query);
+                if (!row.hidden) visible++;
+            }
+            form.querySelector('[data-recipe-count]').textContent = visible
+                ? `${visible} recette${visible === 1 ? '' : 's'}` : 'Aucune recette trouvée.';
+        }
+
+        function summarize() {
+            const chosen = rows.filter(({ checkbox }) => checkbox.checked);
+            form.querySelector('[data-selection-count]').textContent = chosen.length ? `(${chosen.length})` : '';
+            form.querySelector('[data-selection-empty]').hidden = chosen.length > 0;
+            for (const { checkbox, choice } of rows) {
+                choice.textContent = checkbox.checked ? 'Choisie' : 'Choisir';
+            }
+
+            selection.replaceChildren(...chosen.map(({ row, name, checkbox, people, ingredients }) => {
+                const included = ingredients.filter((ingredient) => ingredient.checked).length;
+                const item = document.createElement('li');
+                const description = document.createElement('div');
+                const title = document.createElement('strong');
+                title.textContent = name;
+                const detail = document.createElement('div');
+                detail.className = 'small muted';
+                detail.textContent = included
+                    ? `${people.value || row.dataset.defaultPeople} pers. · ${included} ingrédient${included === 1 ? '' : 's'}`
+                    : 'Choisis au moins un ingrédient.';
+                description.append(title, detail);
+
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'btn';
+                remove.textContent = 'Retirer';
+                remove.setAttribute('aria-label', `Retirer ${name} de la sélection`);
+                remove.addEventListener('click', () => {
+                    checkbox.checked = false;
+                    summarize();
+                    (row.hidden ? search : checkbox).focus();
+                });
+                item.append(description, remove);
+                return item;
+            }));
+            submit.disabled = !chosen.length;
+        }
+
+        search.addEventListener('input', filterRecipes);
+        search.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') event.preventDefault();
+        });
+        form.addEventListener('change', summarize);
+        form.addEventListener('input', (event) => {
+            if (event.target.type === 'number') summarize();
+        });
+        form.addEventListener('invalid', (event) => {
+            const row = event.target.closest('[data-recipe-row]');
+            if (!row) return;
+            if (row.hidden) {
+                search.value = '';
+                filterRecipes();
+            }
+            row.querySelector('details').open = true;
+        }, true);
+
+        form.querySelector('[data-recipe-search]').hidden = false;
+        form.querySelector('[data-selection-preview]').hidden = false;
+        filterRecipes();
+        summarize();
+    })();
+</script>
 {% endblock %}
