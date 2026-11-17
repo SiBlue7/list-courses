@@ -2,10 +2,14 @@ from decimal import Decimal
 
 from django.db import transaction
 
-from core.models import ShoppingListItem, ShoppingListRecipe, ShoppingListRecipeIngredient
+from core.models import ShoppingList, ShoppingListItem, ShoppingListRecipe, ShoppingListRecipeIngredient
 
 
 DISPLAY_QUANTITY = Decimal('0.01')
+
+
+def open_shopping_lists():
+    return ShoppingList.objects.filter(is_closed=False).order_by('-created_at', '-id')
 
 
 def _quantity_for_people(quantity_per_person, people_count):

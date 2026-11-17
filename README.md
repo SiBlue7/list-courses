@@ -225,6 +225,20 @@ python manage.py migrate
 
 ---
 
+## Intégration HomeHub
+
+`GET /api/lists/active/` retourne la liste active et ses articles par rayon.
+Le backend HomeHub appelle cette route en HTTPS avec l’en-tête
+`Authorization: Bearer <token>`.
+
+1. Générer un secret aléatoire, par exemple avec `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+2. Définir `HOMEHUB_API_TOKEN` dans le `.env` Django utilisé par Docker Compose et configurer le même secret dans l’environnement du backend HomeHub. Garder la valeur hors du dépôt, des URL, du navigateur et des logs.
+3. Après avoir installé cette version du code, lancer `docker compose up -d --build web` pour reconstruire le service Django et appliquer la configuration.
+
+Pour remplacer le secret, modifier les deux configurations et recréer les services concernés. Pour révoquer l’accès, vider `HOMEHUB_API_TOKEN` côté Django, puis recréer le service `web`. Une valeur vide désactive l’accès.
+
+[Contrat JSON et prompt pour l’agent HomeHub](HOMEHUB_PROMPT.md)
+
 ## 🆘 Dépannage
 
 ### Erreur "python.exe introuvable"

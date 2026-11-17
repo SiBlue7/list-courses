@@ -1,10 +1,94 @@
 from decimal import Decimal
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .models import Ingredient, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem, ShoppingListRecipe
+from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, ShoppingList, ShoppingListItem, ShoppingListRecipe
+
+
+@override_settings(HOMEHUB_API_TOKEN='test-homehub-token')
+class ActiveShoppingListApiTests(TestCase):
+    def setUp(self):
+        self.url = reverse('api_active_shopping_list')
+        self.headers = {'Authorization': 'Bearer test-homehub-token'}
+        self.user = User.objects.create_user(username='owner')
+
+    def test_requires_the_current_token_even_with_a_site_session(self):
+        self.client.force_login(self.user)
+        for headers in ({}, {'Authorization': 'Bearer invalid'}):
+            with self.subTest(headers=headers):
+                response = self.client.get(self.url, headers=headers)
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json(), {'error': 'unauthorized'})
+                self.assertEqual(response.headers['WWW-Authenticate'], 'Bearer')
+
+        for token in ('', 'rotated-test-token'):
+            with self.subTest(token=token), self.settings(HOMEHUB_API_TOKEN=token):
+                self.assertEqual(self.client.get(self.url, headers=self.headers).status_code, 401)
+
+    def test_returns_no_active_list_when_all_lists_are_closed(self):
+        ShoppingList.objects.create(name='Archives', owner=self.user, is_closed=True)
+
+        response = self.client.get(self.url, headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'list': None})
+        self.assertIn('no-store', response.headers['Cache-Control'])
+
+    def test_returns_an_open_empty_list(self):
+        active = ShoppingList.objects.create(name='Courses', owner=self.user)
+
+        response = self.client.get(self.url, headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'list': {'id': active.pk, 'name': 'Courses', 'groups': []}})
+
+    def test_returns_only_the_active_list_with_items_grouped_by_category(self):
+        older = ShoppingList.objects.create(name='Autres courses', owner=self.user)
+        active = ShoppingList.objects.create(name='Courses', owner=self.user)
+        ShoppingList.objects.filter(pk=active.pk).update(created_at=older.created_at)
+        ShoppingList.objects.create(name='Archives', owner=self.user, is_closed=True)
+        ShoppingListItem.objects.create(shopping_list=older, name='Pain', quantity=1)
+        category = IngredientCategory.objects.create(name='Fruits et légumes')
+        ingredient = Ingredient.objects.create(name='Riz', category=category)
+        rice = ShoppingListItem.objects.create(
+            shopping_list=active, ingredient=ingredient, unit='g', quantity=Decimal('250.50'),
+        )
+        apples = ShoppingListItem.objects.create(
+            shopping_list=active, name='Pommes', quantity=2, checked=True,
+        )
+
+        response = self.client.get(self.url, headers=self.headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'list': {
+            'id': active.pk,
+            'name': 'Courses',
+            'groups': [
+                {'label': 'Fruits et légumes', 'items': [{
+                    'id': rice.pk, 'name': 'Riz', 'quantity': '250.50',
+                    'unit': 'g', 'unit_label': 'g', 'checked': False,
+                }]},
+                {'label': 'Sans catégorie', 'items': [{
+                    'id': apples.pk, 'name': 'Pommes', 'quantity': '2.00',
+                    'unit': '', 'unit_label': '', 'checked': True,
+                }]},
+            ],
+        }})
+
+        self.client.force_login(self.user)
+        self.assertRedirects(
+            self.client.get(reverse('shopping_list_active')),
+            reverse('shopping_list_detail', args=[active.pk]),
+            fetch_redirect_response=False,
+        )
+
+    def test_rejects_write_methods(self):
+        response = self.client.post(self.url, headers=self.headers)
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.headers['Allow'], 'GET')
 
 
 class ShoppingListRecipeQuantityTests(TestCase):

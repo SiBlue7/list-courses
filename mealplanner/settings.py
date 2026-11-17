@@ -5,6 +5,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Configuration via variables d'environnement pour Docker
 SECRET_KEY = os.environ.get('SECRET_KEY', 'change-me-in-production')
+HOMEHUB_API_TOKEN = os.environ.get('HOMEHUB_API_TOKEN', '')
 
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 

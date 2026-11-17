@@ -2,12 +2,16 @@
 from urllib.parse import urlencode
 from collections import OrderedDict
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.db.models import ProtectedError
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.crypto import constant_time_compare
+from django.views.decorators.cache import never_cache
 
 from .forms import (
     AddRecipesForm,
@@ -25,6 +29,7 @@ from .models import Ingredient, IngredientCategory, Recipe, RecipeIngredient, Sh
 from .services.shopping_lists import (
     add_recipe_to_shopping_list,
     exclude_recipe_contributions_for_item,
+    open_shopping_lists,
     remove_recipe_entry,
     update_recipe_entry,
 )
@@ -142,7 +147,7 @@ def register(request):
 
 @login_required
 def dashboard(request):
-    open_lists = ShoppingList.objects.filter(is_closed=False).order_by('-created_at')
+    open_lists = open_shopping_lists()
     active_list = open_lists.first()
 
     return render(
@@ -594,12 +599,52 @@ def shopping_list_archive(request):
 
 @login_required
 def shopping_list_active(request):
-    open_lists = ShoppingList.objects.filter(is_closed=False).order_by('-created_at')
-    active_list = open_lists.first()
+    active_list = open_shopping_lists().first()
     if not active_list:
         messages.info(request, 'Aucune liste active. Créez-en une nouvelle.')
         return redirect('shopping_list_create')
     return redirect('shopping_list_detail', list_id=active_list.id)
+
+
+@never_cache
+def api_active_shopping_list(request):
+    scheme, _, token = request.headers.get('Authorization', '').partition(' ')
+    if (
+        not settings.HOMEHUB_API_TOKEN
+        or scheme.lower() != 'bearer'
+        or not constant_time_compare(token, settings.HOMEHUB_API_TOKEN)
+    ):
+        return JsonResponse(
+            {'error': 'unauthorized'}, status=401, headers={'WWW-Authenticate': 'Bearer'},
+        )
+
+    if request.method != 'GET':
+        return JsonResponse(
+            {'error': 'method_not_allowed'}, status=405, headers={'Allow': 'GET'},
+        )
+
+    active_list = open_shopping_lists().first()
+    if active_list is None:
+        return JsonResponse({'list': None})
+
+    groups = [
+        {
+            'label': group['label'],
+            'items': [
+                {
+                    'id': item.id,
+                    'name': item.display_name,
+                    'quantity': str(item.quantity),
+                    'unit': item.unit,
+                    'unit_label': item.get_unit_display(),
+                    'checked': item.checked,
+                }
+                for item in group['entries']
+            ],
+        }
+        for group in _shopping_items_grouped_by_category(active_list)
+    ]
+    return JsonResponse({'list': {'id': active_list.id, 'name': active_list.name, 'groups': groups}})
 
 
 
