@@ -26,6 +26,7 @@ from .forms import (
     ManualItemQuickAddForm,
     RecipeForm,
     RecipeIngredientQuickAddForm,
+    RecipePeopleForm,
     RegistrationForm,
     ShoppingListRecipeEntryForm,
     ShoppingListForm,
@@ -36,9 +37,11 @@ from .services.shopping_lists import (
     ActiveListChanged,
     IdempotencyConflict,
     add_homehub_item,
+    add_homehub_recipe,
     add_manual_item,
     add_recipe_to_shopping_list,
     open_shopping_lists,
+    quantity_for_people,
     remove_recipe_entry,
     remove_shopping_item,
     update_recipe_entry,
@@ -658,21 +661,85 @@ def api_active_shopping_list(request):
 @_homehub_endpoint('GET')
 def api_ingredients(request):
     ingredients, _ = _filter_ingredients(request.GET.get('q', '').strip(), '')
+    return _homehub_catalog_page(
+        request, ingredients, 'ingredients',
+        units=[{'code': code, 'label': label} for code, label in UNIT_CHOICES_WITH_EMPTY],
+    )
+
+
+@_homehub_endpoint('GET')
+def api_recipes(request):
+    query = request.GET.get('q', '').strip()
+    return _homehub_catalog_page(
+        request, Recipe.objects.filter(name__icontains=query).order_by('name', 'id'), 'recipes',
+    )
+
+
+def _homehub_catalog_page(request, queryset, key, **extra):
     try:
-        page = Paginator(ingredients, 30).page(request.GET.get('page', 1))
+        page = Paginator(queryset, 30).page(request.GET.get('page', 1))
     except InvalidPage:
         return JsonResponse({'error': 'invalid_page'}, status=400)
 
     return JsonResponse({
-        'ingredients': [{'id': ingredient.id, 'name': ingredient.name} for ingredient in page],
-        'units': [{'code': code, 'label': label} for code, label in UNIT_CHOICES_WITH_EMPTY],
+        key: [{'id': entry.id, 'name': entry.name} for entry in page],
         'next_page': page.next_page_number() if page.has_next() else None,
+        **extra,
+    })
+
+
+@_homehub_endpoint('GET')
+def api_recipe_detail(request, recipe_id):
+    recipe = Recipe.objects.filter(pk=recipe_id).first()
+    if recipe is None:
+        return JsonResponse({'error': 'recipe_not_found'}, status=404)
+
+    form = RecipePeopleForm({'people_count': request.GET.get('people_count', 1)})
+    if not form.is_valid():
+        return _homehub_validation_error(form.errors)
+    people_count = form.cleaned_data['people_count']
+    return JsonResponse({
+        'id': recipe.id,
+        'name': recipe.name,
+        'people_count': people_count,
+        'ingredients': [
+            {
+                'id': line.id,
+                'ingredient_id': line.ingredient_id,
+                'name': line.display_name,
+                'quantity_per_person': str(line.quantity_per_person),
+                'quantity': str(quantity_for_people(line.quantity_per_person, people_count)),
+                'unit': line.unit,
+                'unit_label': line.get_unit_display(),
+            }
+            for line in recipe.ingredients.select_related('ingredient')
+        ],
     })
 
 
 @csrf_exempt
 @_homehub_endpoint('POST')
 def api_add_shopping_item(request, list_id):
+    return _homehub_addition(
+        request, list_id, {'ingredient_id': int, 'quantity': str, 'unit': str}, add_homehub_item,
+    )
+
+
+@csrf_exempt
+@_homehub_endpoint('POST')
+def api_add_recipe(request, list_id):
+    return _homehub_addition(
+        request, list_id,
+        {'recipe_id': int, 'people_count': int, 'included_recipe_ingredient_ids': list},
+        add_homehub_recipe,
+    )
+
+
+def _homehub_validation_error(fields):
+    return JsonResponse({'error': 'validation_error', 'fields': fields}, status=400)
+
+
+def _homehub_addition(request, list_id, field_types, add):
     if request.content_type != 'application/json':
         return JsonResponse({'error': 'unsupported_media_type'}, status=415)
     try:
@@ -686,21 +753,21 @@ def api_add_shopping_item(request, list_id):
 
     if (
         not isinstance(payload, dict)
-        or payload.keys() != {'ingredient_id', 'quantity', 'unit'}
-        or type(payload['ingredient_id']) is not int
-        or not isinstance(payload['quantity'], str)
-        or not isinstance(payload['unit'], str)
+        or payload.keys() != field_types.keys()
+        or any(type(payload[field]) is not expected for field, expected in field_types.items())
     ):
         return JsonResponse({'error': 'invalid_payload'}, status=400)
 
     try:
-        add_homehub_item(list_id, key, payload)
+        add(list_id, key, payload)
+    except Recipe.DoesNotExist:
+        return JsonResponse({'error': 'recipe_not_found'}, status=404)
     except ActiveListChanged:
         return JsonResponse({'error': 'active_list_changed'}, status=409)
     except IdempotencyConflict:
         return JsonResponse({'error': 'idempotency_conflict'}, status=409)
     except ValidationError as error:
-        return JsonResponse({'error': 'validation_error', 'fields': error.message_dict}, status=400)
+        return _homehub_validation_error(error.message_dict)
     return JsonResponse({'list_id': list_id})
 
 

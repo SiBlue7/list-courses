@@ -215,16 +215,140 @@ class HomeHubIngredientTests(TestCase):
 
 
 @override_settings(HOMEHUB_API_TOKEN='test-homehub-token')
-class HomeHubIngredientConcurrencyTests(TransactionTestCase):
+class HomeHubRecipeTests(TestCase):
+    def setUp(self):
+        owner = User.objects.create_user(username='owner')
+        self.shopping_list = ShoppingList.objects.create(name='Courses', owner=owner)
+        self.recipe = Recipe.objects.create(name='Riz au curry', owner=owner)
+        rice = Ingredient.objects.create(name='Riz')
+        curry = Ingredient.objects.create(name='Curry')
+        self.rice = RecipeIngredient.objects.create(
+            recipe=self.recipe, ingredient=rice, quantity_per_person=Decimal('75.25'), unit='g',
+        )
+        self.curry = RecipeIngredient.objects.create(
+            recipe=self.recipe, ingredient=curry, quantity_per_person=Decimal('0.50'), unit='cc',
+        )
+        self.client = Client(enforce_csrf_checks=True)
+        self.headers = {'Authorization': 'Bearer test-homehub-token'}
+        self.payload = {
+            'recipe_id': self.recipe.id,
+            'people_count': 3,
+            'included_recipe_ingredient_ids': [self.rice.id],
+        }
+
+    def add_recipe(self, key, **changes):
+        return self.client.post(
+            reverse('api_add_recipe', args=[self.shopping_list.id]),
+            {**self.payload, **changes},
+            content_type='application/json',
+            headers={**self.headers, 'Idempotency-Key': str(key)},
+        )
+
+    def test_search_and_preview_use_recipe_line_ids_and_scaled_quantities(self):
+        search = reverse('api_recipes')
+        detail = reverse('api_recipe_detail', args=[self.recipe.id])
+        self.assertEqual(self.client.get(search).status_code, 401)
+        self.assertEqual(self.client.get(detail).status_code, 401)
+        self.assertEqual(
+            self.client.get(search, {'q': ' RIZ '}, headers=self.headers).json(),
+            {'recipes': [{'id': self.recipe.id, 'name': self.recipe.name}], 'next_page': None},
+        )
+        response = self.client.get(detail, {'people_count': 3}, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['people_count'], 3)
+        self.assertEqual(response.json()['ingredients'][1], {
+            'id': self.rice.id, 'ingredient_id': self.rice.ingredient_id, 'name': 'Riz',
+            'quantity_per_person': '75.25', 'quantity': '225.75', 'unit': 'g', 'unit_label': 'g',
+        })
+        self.assertEqual(self.client.get(detail, {'people_count': 0}, headers=self.headers).status_code, 400)
+        missing = reverse('api_recipe_detail', args=[self.recipe.id + 1])
+        self.assertEqual(self.client.get(missing, headers=self.headers).status_code, 404)
+
+    def test_requires_token_and_rejects_bad_portions_and_foreign_or_empty_selections(self):
+        write = reverse('api_add_recipe', args=[self.shopping_list.id])
+        self.assertEqual(self.client.post(write, self.payload, content_type='application/json').status_code, 401)
+        foreign_recipe = Recipe.objects.create(name='Autre', owner=self.recipe.owner)
+        foreign = RecipeIngredient.objects.create(
+            recipe=foreign_recipe, ingredient=self.rice.ingredient, quantity_per_person=1, unit='g',
+        )
+        self.assertEqual(self.add_recipe(uuid4(), recipe_id=foreign_recipe.id + 1).status_code, 404)
+        for field, value in (
+            ('people_count', 0), ('people_count', 2147483648),
+            ('included_recipe_ingredient_ids', []), ('included_recipe_ingredient_ids', [foreign.id]),
+            ('included_recipe_ingredient_ids', [True]),
+        ):
+            with self.subTest(field=field, value=value):
+                response = self.add_recipe(uuid4(), **{field: value})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(field, response.json()['fields'])
+        self.assertFalse(ShoppingListRecipe.objects.exists())
+        self.assertFalse(HomeHubItemAddition.objects.exists())
+
+    def test_adds_selected_portions_once_and_replays_after_closure(self):
+        item = ShoppingListItem.objects.create(
+            shopping_list=self.shopping_list, ingredient=self.rice.ingredient, unit='g',
+            quantity=Decimal('10.00'), checked=True,
+        )
+        key = uuid4()
+        self.assertEqual(self.add_recipe(key).json(), {'list_id': self.shopping_list.id})
+        entry = ShoppingListRecipe.objects.get()
+        self.assertEqual(entry.people_count, 3)
+        self.assertEqual(
+            dict(entry.ingredients.values_list('ingredient_id', 'is_included')),
+            {self.rice.ingredient_id: True, self.curry.ingredient_id: False},
+        )
+        self.shopping_list.close()
+        self.assertEqual(self.add_recipe(key).status_code, 200)
+        self.assertEqual(self.add_recipe(key, people_count=4).json(), {'error': 'idempotency_conflict'})
+        manual = self.client.post(
+            reverse('api_add_shopping_item', args=[self.shopping_list.id]),
+            {'ingredient_id': self.rice.ingredient_id, 'quantity': '1.00', 'unit': 'g'},
+            content_type='application/json',
+            headers={**self.headers, 'Idempotency-Key': str(key)},
+        )
+        self.assertEqual(manual.json(), {'error': 'idempotency_conflict'})
+        self.assertEqual(self.add_recipe(uuid4()).json(), {'error': 'active_list_changed'})
+        item.refresh_from_db()
+        self.assertEqual(item.quantity, Decimal('235.75'))
+        self.assertTrue(item.checked)
+        self.assertEqual(ShoppingListItem.objects.count(), 1)
+        self.assertEqual(ShoppingListRecipe.objects.count(), 1)
+
+    def test_rolls_back_all_recipe_contributions_when_a_total_overflows(self):
+        item = ShoppingListItem.objects.create(
+            shopping_list=self.shopping_list, ingredient=self.rice.ingredient, unit='g',
+            quantity=Decimal('99999999.99'),
+        )
+        response = self.add_recipe(uuid4(), included_recipe_ingredient_ids=[self.curry.id, self.rice.id])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('quantity', response.json()['fields'])
+        self.assertFalse(ShoppingListRecipe.objects.exists())
+        self.assertFalse(HomeHubItemAddition.objects.exists())
+        self.assertEqual(ShoppingListItem.objects.get().pk, item.pk)
+        item.refresh_from_db()
+        self.assertEqual(item.quantity, Decimal('99999999.99'))
+
+
+@override_settings(HOMEHUB_API_TOKEN='test-homehub-token')
+class HomeHubAdditionConcurrencyTests(TransactionTestCase):
     @skipUnlessDBFeature('has_select_for_no_key_update')
     def test_concurrent_retries_and_distinct_additions_merge_into_one_row(self):
         owner = User.objects.create_user(username='owner')
         shopping_list = ShoppingList.objects.create(name='Courses', owner=owner)
         ingredient = Ingredient.objects.create(name='Riz')
         url = reverse('api_add_shopping_item', args=[shopping_list.pk])
+        recipe_url = reverse('api_add_recipe', args=[shopping_list.pk])
         site_url = reverse('shopping_list_detail', args=[shopping_list.pk])
         payload = {'ingredient_id': ingredient.pk, 'quantity': '2.50', 'unit': 'g'}
-        barrier = Barrier(4, timeout=10)
+        recipe = Recipe.objects.create(name='Riz', owner=owner)
+        line = RecipeIngredient.objects.create(
+            recipe=recipe, ingredient=ingredient, quantity_per_person=Decimal('2.50'), unit='g',
+        )
+        recipe_payload = {
+            'recipe_id': recipe.pk, 'people_count': 2, 'included_recipe_ingredient_ids': [line.pk],
+        }
+        recipe_key = uuid4()
+        barrier = Barrier(6, timeout=10)
 
         def add_item(key):
             close_old_connections()
@@ -236,8 +360,8 @@ class HomeHubIngredientConcurrencyTests(TransactionTestCase):
                 if key is None:
                     return client.post(site_url, data=payload).status_code
                 return client.post(
-                    url,
-                    data=payload,
+                    recipe_url if key == recipe_key else url,
+                    data=recipe_payload if key == recipe_key else payload,
                     content_type='application/json',
                     headers={'Authorization': 'Bearer test-homehub-token', 'Idempotency-Key': str(key)},
                 ).status_code
@@ -245,11 +369,12 @@ class HomeHubIngredientConcurrencyTests(TransactionTestCase):
                 connections.close_all()
 
         repeated_key = uuid4()
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            statuses = list(pool.map(add_item, [repeated_key, repeated_key, uuid4(), None]))
-        self.assertEqual(statuses, [200, 200, 200, 302])
-        self.assertEqual(ShoppingListItem.objects.get().quantity, Decimal('7.50'))
-        self.assertEqual(HomeHubItemAddition.objects.count(), 2)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            statuses = list(pool.map(add_item, [repeated_key, repeated_key, uuid4(), None, recipe_key, recipe_key]))
+        self.assertEqual(statuses, [200, 200, 200, 302, 200, 200])
+        self.assertEqual(ShoppingListItem.objects.get().quantity, Decimal('12.50'))
+        self.assertEqual(ShoppingListRecipe.objects.count(), 1)
+        self.assertEqual(HomeHubItemAddition.objects.count(), 3)
 
 
 class ShoppingListRecipeQuantityTests(TestCase):

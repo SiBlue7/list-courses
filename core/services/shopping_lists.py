@@ -4,10 +4,12 @@ import json
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.db.models import prefetch_related_objects
 
-from core.forms import ManualItemQuickAddForm
+from core.forms import HomeHubRecipeForm, ManualItemQuickAddForm
 from core.models import (
     HomeHubItemAddition,
+    Recipe,
     ShoppingList,
     ShoppingListItem,
     ShoppingListRecipe,
@@ -51,20 +53,16 @@ def add_manual_item(shopping_list, ingredient, quantity, unit):
         return True
 
     total = (item.quantity + quantity).quantize(DISPLAY_QUANTITY)
-    try:
-        ShoppingListItem._meta.get_field('quantity').run_validators(total)
-    except ValidationError as error:
-        raise ValidationError({'quantity': error}) from error
+    _validate_item_quantity(total)
     item.quantity = total
     item.per_person_quantity = None
     item.save(update_fields=['quantity', 'per_person_quantity'])
     return False
 
 
-@transaction.atomic
-def add_homehub_item(list_id, key, payload):
-    request_data = json.dumps([list_id, payload], sort_keys=True, separators=(',', ':'))
-    digest = sha256(request_data.encode()).hexdigest()
+def _claim_homehub_addition(list_id, key, request_data):
+    encoded = json.dumps(request_data, sort_keys=True, separators=(',', ':')).encode()
+    digest = sha256(encoded).hexdigest()
     try:
         with transaction.atomic():
             HomeHubItemAddition.objects.create(key=key, request_digest=digest)
@@ -72,7 +70,7 @@ def add_homehub_item(list_id, key, payload):
         receipt = HomeHubItemAddition.objects.get(pk=key)
         if receipt.request_digest != digest:
             raise IdempotencyConflict
-        return
+        return None
 
     if connection.vendor == 'postgresql':
         # Keep list creation and closure from changing the active list until commit.
@@ -83,6 +81,14 @@ def add_homehub_item(list_id, key, payload):
     active_list = open_shopping_lists().first()
     if active_list is None or active_list.pk != list_id:
         raise ActiveListChanged
+    return active_list
+
+
+@transaction.atomic
+def add_homehub_item(list_id, key, payload):
+    active_list = _claim_homehub_addition(list_id, key, [list_id, payload])
+    if active_list is None:
+        return
 
     form = ManualItemQuickAddForm(payload)
     if not form.is_valid():
@@ -95,7 +101,28 @@ def add_homehub_item(list_id, key, payload):
     )
 
 
-def _quantity_for_people(quantity_per_person, people_count):
+@transaction.atomic
+def add_homehub_recipe(list_id, key, payload):
+    active_list = _claim_homehub_addition(list_id, key, ['recipe', list_id, payload])
+    if active_list is None:
+        return
+
+    recipe = Recipe.objects.select_for_update(
+        no_key=connection.features.has_select_for_no_key_update,
+    ).get(pk=payload['recipe_id'])
+    prefetch_related_objects([recipe], 'ingredients__ingredient')
+    form = HomeHubRecipeForm(payload, recipe=recipe)
+    if not form.is_valid():
+        raise ValidationError(form.errors.as_data())
+    add_recipe_to_shopping_list(
+        active_list,
+        recipe,
+        form.cleaned_data['people_count'],
+        form.cleaned_data['included_recipe_ingredient_ids'],
+    )
+
+
+def quantity_for_people(quantity_per_person, people_count):
     return (quantity_per_person * Decimal(people_count)).quantize(DISPLAY_QUANTITY)
 
 
@@ -118,6 +145,7 @@ def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
             item.delete()
             return
 
+        _validate_item_quantity(new_quantity)
         item.quantity = new_quantity
         item.per_person_quantity = None
         item.name = name
@@ -129,6 +157,7 @@ def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
         return
 
     if delta > 0:
+        _validate_item_quantity(delta)
         ShoppingListItem.objects.create(
             shopping_list=shopping_list,
             ingredient=ingredient,
@@ -137,6 +166,13 @@ def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
             quantity=delta,
             per_person_quantity=None,
         )
+
+
+def _validate_item_quantity(quantity):
+    try:
+        ShoppingListItem._meta.get_field('quantity').run_validators(quantity)
+    except ValidationError as error:
+        raise ValidationError({'quantity': error}) from error
 
 
 @transaction.atomic
@@ -150,7 +186,8 @@ def add_recipe_to_shopping_list(shopping_list, recipe, people_count, included_re
         people_count=people_count,
     )
 
-    for recipe_ingredient in recipe.ingredients.select_related('ingredient'):
+    prefetch_related_objects([recipe], 'ingredients__ingredient')
+    for recipe_ingredient in recipe.ingredients.all():
         ingredient = recipe_ingredient.ingredient
         is_included = recipe_ingredient.id in included_ids
         entry_ingredient = ShoppingListRecipeIngredient.objects.create(
@@ -163,7 +200,7 @@ def add_recipe_to_shopping_list(shopping_list, recipe, people_count, included_re
         )
 
         if is_included:
-            quantity = _quantity_for_people(entry_ingredient.quantity_per_person, people_count)
+            quantity = quantity_for_people(entry_ingredient.quantity_per_person, people_count)
             _apply_quantity_delta(shopping_list, ingredient, ingredient.name, entry_ingredient.unit, quantity)
 
     return recipe_entry
@@ -182,12 +219,12 @@ def update_recipe_entry(recipe_entry, people_count, included_entry_ingredient_id
     for entry_ingredient in entry_ingredients:
         old_quantity = Decimal('0.00')
         if entry_ingredient.is_included:
-            old_quantity = _quantity_for_people(entry_ingredient.quantity_per_person, old_people_count)
+            old_quantity = quantity_for_people(entry_ingredient.quantity_per_person, old_people_count)
 
         new_is_included = entry_ingredient.id in included_ids
         new_quantity = Decimal('0.00')
         if new_is_included:
-            new_quantity = _quantity_for_people(entry_ingredient.quantity_per_person, people_count)
+            new_quantity = quantity_for_people(entry_ingredient.quantity_per_person, people_count)
 
         delta = (new_quantity - old_quantity).quantize(DISPLAY_QUANTITY)
         _apply_quantity_delta(
@@ -219,7 +256,7 @@ def remove_recipe_entry(recipe_entry):
         if not entry_ingredient.is_included:
             continue
 
-        quantity = _quantity_for_people(entry_ingredient.quantity_per_person, recipe_entry.people_count)
+        quantity = quantity_for_people(entry_ingredient.quantity_per_person, recipe_entry.people_count)
         _apply_quantity_delta(
             recipe_entry.shopping_list,
             entry_ingredient.ingredient,

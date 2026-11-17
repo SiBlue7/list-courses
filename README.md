@@ -249,6 +249,14 @@ Docker, lancer `python manage.py migrate`.
 
 [Contrat des ajouts et prompt pour HomeHub](HOMEHUB_INGREDIENTS_PROMPT.md)
 
+Le même jeton permet de rechercher des recettes avec `GET /api/recipes/`,
+de prévisualiser les quantités pour un nombre de personnes avec
+`GET /api/recipes/<id>/?people_count=2` et d’ajouter une recette à la liste
+active avec `POST /api/lists/<id>/recipes/`. Les deux routes d’ajout partagent
+les clés d’idempotence. La migration précédente suffit.
+
+[Contrat des recettes et prompt pour HomeHub](HOMEHUB_RECIPES_PROMPT.md)
+
 ## 🆘 Dépannage
 
 ### Erreur "python.exe introuvable"

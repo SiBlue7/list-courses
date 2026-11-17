@@ -236,3 +236,22 @@ class ManualItemQuickAddForm(forms.Form):
         if ingredient is None:
             raise ValidationError('Ingrédient introuvable.')
         return ingredient
+
+
+class RecipePeopleForm(forms.Form):
+    people_count = forms.IntegerField(min_value=1, max_value=2147483647)
+
+
+class HomeHubRecipeForm(RecipePeopleForm):
+    included_recipe_ingredient_ids = forms.Field()
+
+    def __init__(self, *args, recipe, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.recipe = recipe
+
+    def clean_included_recipe_ingredient_ids(self):
+        selected = self.cleaned_data['included_recipe_ingredient_ids']
+        allowed = {line.id for line in self.recipe.ingredients.all()}
+        if any(type(line_id) is not int or line_id not in allowed for line_id in selected):
+            raise ValidationError('Sélectionnez uniquement des ingrédients de cette recette.')
+        return selected
