@@ -87,7 +87,9 @@
                                 {% endif %}
                                 <label class="shopping-item-label" for="shopping_item_{{ item.id }}">
                                     <strong>{{ item.display_name }}</strong>
-                                    <span class="small muted">{{ item.quantity }} {{ item.get_unit_display }}</span>
+                                    {% with measure=item.display_measure %}
+                                        <span class="small muted">{% if item.is_estimated %}≈ {% endif %}{{ measure.0 }} {{ measure.1 }}</span>
+                                    {% endwith %}
                                 </label>
                             </div>
                             {% if not shopping_list.is_closed %}

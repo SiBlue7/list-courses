@@ -43,7 +43,7 @@ class IngredientCategoryForm(forms.ModelForm):
 class IngredientForm(forms.ModelForm):
     class Meta:
         model = Ingredient
-        fields = ['name', 'category']
+        fields = ['name', 'category', 'grams_per_teaspoon', 'grams_per_tablespoon', 'grams_per_pinch']
         widgets = {
             'name': forms.TextInput(attrs={'placeholder': 'Ex: Tomates'}),
         }

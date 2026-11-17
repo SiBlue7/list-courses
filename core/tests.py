@@ -377,6 +377,104 @@ class HomeHubAdditionConcurrencyTests(TransactionTestCase):
         self.assertEqual(HomeHubItemAddition.objects.count(), 3)
 
 
+class ShoppingListUnitConversionTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='owner')
+        self.shopping_list = ShoppingList.objects.create(name='Courses', owner=self.user)
+        self.client.force_login(self.user)
+
+    def add_item(self, ingredient, quantity, unit):
+        return self.client.post(
+            reverse('shopping_list_detail', args=[self.shopping_list.id]),
+            {'ingredient_id': ingredient.id, 'quantity': quantity, 'unit': unit},
+        )
+
+    def add_recipe(self, line):
+        return self.client.post(
+            reverse('shopping_list_add_recipes', args=[self.shopping_list.id]),
+            {
+                f'select_{line.recipe_id}': 'on',
+                f'people_{line.recipe_id}': '2',
+                f'include_{line.recipe_id}_{line.id}': 'on',
+            },
+        )
+
+    def test_metric_units_group_and_legacy_recipe_removal_restores_manual_amount(self):
+        rice = Ingredient.objects.create(name='Riz')
+        recipe = Recipe.objects.create(name='Riz', owner=self.user)
+        entry = ShoppingListRecipe.objects.create(
+            shopping_list=self.shopping_list, recipe=recipe, recipe_name=recipe.name,
+        )
+        entry.ingredients.create(ingredient=rice, quantity_per_person=Decimal('1.00'), unit='kg')
+        legacy = self.shopping_list.items.create(ingredient=rice, quantity=Decimal('1.00'), unit='kg')
+
+        self.assertEqual(self.add_item(rice, '500', 'g').status_code, 302)
+        legacy.refresh_from_db()
+        self.assertEqual((legacy.quantity, legacy.unit, legacy.display_measure), (
+            Decimal('1500'), 'g', (Decimal('1.5'), 'kg'),
+        ))
+        self.assertContains(
+            self.client.get(reverse('shopping_list_detail', args=[self.shopping_list.id])), '1,5 kg',
+        )
+        response = self.client.post(
+            reverse('shopping_list_recipe_remove', args=[self.shopping_list.id, entry.id]),
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.shopping_list.items.get().quantity, Decimal('500'))
+
+        milk = Ingredient.objects.create(name='Lait')
+        self.add_item(milk, '1', 'l')
+        self.add_item(milk, '150', 'ml')
+        self.assertEqual(self.shopping_list.items.get(ingredient=milk).display_measure, (Decimal('1.15'), 'l'))
+
+    def test_household_conversion_uses_saved_factor_when_recipe_changes(self):
+        salt = Ingredient.objects.create(name='Sel')
+        edit_url = reverse('ingredient_edit', args=[salt.id])
+        self.assertEqual(self.client.post(edit_url, {'name': salt.name, 'grams_per_teaspoon': '6'}).status_code, 302)
+        recipe = Recipe.objects.create(name='Soupe', owner=self.user)
+        line = recipe.ingredients.create(ingredient=salt, quantity_per_person=1, unit='cc')
+        self.add_item(salt, '10', 'g')
+        self.add_item(salt, '1', 'pincee')
+        self.assertEqual(self.add_recipe(line).status_code, 302)
+        entry = self.shopping_list.recipe_entries.get()
+        added_line = entry.ingredients.get()
+        self.assertEqual((added_line.unit, added_line.conversion_factor), ('cc', Decimal('6')))
+        self.assertEqual(self.shopping_list.items.get(unit='g').quantity, Decimal('22'))
+        self.assertTrue(self.shopping_list.items.get(unit='g').is_estimated)
+        self.assertEqual(self.shopping_list.items.get(unit='pincee').quantity, 1)
+
+        self.client.post(edit_url, {'name': salt.name, 'grams_per_teaspoon': '8'})
+        response = self.client.post(
+            reverse('shopping_list_recipe_update', args=[self.shopping_list.id, entry.id]),
+            {'people_count': '3', f'include_{added_line.id}': 'on'},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.shopping_list.items.get(unit='g').quantity, Decimal('28'))
+        self.client.post(reverse('shopping_list_recipe_remove', args=[self.shopping_list.id, entry.id]))
+        self.assertEqual(self.shopping_list.items.get(unit='g').quantity, Decimal('10'))
+
+    def test_removing_converted_item_excludes_its_recipe_contributions(self):
+        salt = Ingredient.objects.create(name='Sel', grams_per_pinch=Decimal('0.40'))
+        recipe = Recipe.objects.create(name='Soupe', owner=self.user)
+        line = recipe.ingredients.create(ingredient=salt, quantity_per_person=1, unit='pincee')
+        self.add_recipe(line)
+        item = self.shopping_list.items.get()
+        self.assertEqual((item.quantity, item.unit), (Decimal('0.80'), 'g'))
+        self.client.post(reverse('shopping_list_remove_item', args=[self.shopping_list.id, item.id]))
+        self.assertFalse(self.shopping_list.recipe_entries.get().ingredients.get().is_included)
+        self.assertFalse(self.shopping_list.items.exists())
+
+    def test_legacy_metric_rows_with_different_checked_statuses_stay_separate(self):
+        rice = Ingredient.objects.create(name='Riz')
+        self.shopping_list.items.create(ingredient=rice, quantity=Decimal('1.00'), unit='kg', checked=True)
+        self.shopping_list.items.create(ingredient=rice, quantity=Decimal('500'), unit='g')
+        self.add_item(rice, '150', 'g')
+        self.assertEqual(
+            list(self.shopping_list.items.order_by('checked').values_list('quantity', 'unit', 'checked')),
+            [(Decimal('650'), 'g', False), (Decimal('1.00'), 'kg', True)],
+        )
+
+
 class ShoppingListRecipeQuantityTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='enzo', password='password')

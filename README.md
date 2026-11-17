@@ -225,6 +225,22 @@ python manage.py migrate
 
 ---
 
+## Quantités dans la liste de courses
+
+Les nouveaux ajouts regroupent les poids en grammes et les volumes en
+millilitres. Le site affiche les totaux en kilogrammes ou en litres à partir
+de 1 000 g ou 1 000 mL. Au prochain ajout d’un ingrédient, ses anciennes lignes
+en kilos ou en litres peuvent aussi être regroupées si leurs états « acheté »
+sont identiques.
+
+Sur la fiche ingrédient, tu peux renseigner un poids en grammes par cuillère
+à café rase, cuillère à soupe rase ou pincée. Les champs sont facultatifs.
+Quand un poids est renseigné, les nouveaux ajouts dans cette mesure sont
+convertis et le site marque le total comme approximatif pour la durée de vie
+de la ligne. Une recette déjà
+ajoutée garde le facteur utilisé à l’ajout pour les modifications et le
+retrait de sa contribution.
+
 ## Intégration HomeHub
 
 `GET /api/lists/active/` retourne la liste active et ses articles par rayon.

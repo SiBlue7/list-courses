@@ -11,6 +11,7 @@ from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import InvalidPage, Paginator
+from django.db import transaction
 from django.db.models import ProtectedError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -428,8 +429,8 @@ def shopping_list_detail(request, list_id):
                 )
             except ActiveListChanged:
                 messages.warning(request, "La liste est clôturée, impossible d'ajouter des éléments.")
-            except ValidationError:
-                messages.error(request, 'La quantité totale dépasse la limite autorisée.')
+            except ValidationError as error:
+                messages.error(request, error.messages[0])
             else:
                 if created:
                     messages.success(request, 'Ingrédient ajouté à la liste.')
@@ -488,10 +489,15 @@ def shopping_list_add_recipes(request, list_id):
         if not selected:
             form.add_error(None, 'Sélectionnez au moins une recette.')
         else:
-            for recipe, people, included_ids in selected:
-                add_recipe_to_shopping_list(shopping_list, recipe, people, included_ids)
-            messages.success(request, 'Recettes ajoutées à la liste.')
-            return redirect('shopping_list_detail', list_id=shopping_list.id)
+            try:
+                with transaction.atomic():
+                    for recipe, people, included_ids in selected:
+                        add_recipe_to_shopping_list(shopping_list, recipe, people, included_ids)
+            except ValidationError as error:
+                form.add_error(None, error.messages[0])
+            else:
+                messages.success(request, 'Recettes ajoutées à la liste.')
+                return redirect('shopping_list_detail', list_id=shopping_list.id)
 
     return render(
         request,
@@ -521,13 +527,17 @@ def shopping_list_recipe_update(request, list_id, entry_id):
 
     form = ShoppingListRecipeEntryForm(request.POST or None, recipe_entry=recipe_entry)
     if request.method == 'POST' and form.is_valid():
-        update_recipe_entry(
-            recipe_entry,
-            form.cleaned_data['people_count'],
-            form.included_ingredient_ids(),
-        )
-        messages.success(request, 'Recette mise à jour dans la liste.')
-        return redirect('shopping_list_detail', list_id=shopping_list.id)
+        try:
+            update_recipe_entry(
+                recipe_entry,
+                form.cleaned_data['people_count'],
+                form.included_ingredient_ids(),
+            )
+        except ValidationError as error:
+            form.add_error(None, error.messages[0])
+        else:
+            messages.success(request, 'Recette mise à jour dans la liste.')
+            return redirect('shopping_list_detail', list_id=shopping_list.id)
 
     return render(
         request,

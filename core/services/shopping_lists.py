@@ -4,7 +4,7 @@ import json
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
-from django.db.models import prefetch_related_objects
+from django.db.models import Q, prefetch_related_objects
 
 from core.forms import HomeHubRecipeForm, ManualItemQuickAddForm
 from core.models import (
@@ -18,6 +18,30 @@ from core.models import (
 
 
 DISPLAY_QUANTITY = Decimal('0.01')
+METRIC_UNITS = {'kg': 'g', 'l': 'ml'}
+HOUSEHOLD_FACTORS = {
+    'cc': 'grams_per_teaspoon',
+    'cs': 'grams_per_tablespoon',
+    'pincee': 'grams_per_pinch',
+}
+
+
+def _conversion_factor(ingredient, unit):
+    if unit in METRIC_UNITS:
+        return Decimal('1000')
+    field = HOUSEHOLD_FACTORS.get(unit)
+    return getattr(ingredient, field) if field else None
+
+
+def _converted_unit(unit, factor):
+    return METRIC_UNITS.get(unit, 'g') if factor is not None else unit
+
+
+def _converted_quantity(quantity, factor):
+    converted = (quantity * (factor if factor is not None else 1)).quantize(DISPLAY_QUANTITY)
+    if quantity and not converted:
+        raise ValidationError({'quantity': 'La quantité convertie est inférieure à 0,01 g.'})
+    return converted
 
 
 def open_shopping_lists():
@@ -44,11 +68,18 @@ def add_manual_item(shopping_list, ingredient, quantity, unit):
     if shopping_list.is_closed:
         raise ActiveListChanged
 
+    factor = _conversion_factor(ingredient, unit)
+    estimated = factor is not None and unit in HOUSEHOLD_FACTORS
+    unit = _converted_unit(unit, factor)
+    quantity = _converted_quantity(quantity, factor)
+    _normalize_legacy_metric_items(shopping_list, ingredient, unit)
+
     item = _find_shopping_item(shopping_list, ingredient, ingredient.name, unit)
     if item is None:
+        _validate_item_quantity(quantity)
         ShoppingListItem.objects.create(
             shopping_list=shopping_list, ingredient=ingredient, name=ingredient.name,
-            quantity=quantity, unit=unit,
+            quantity=quantity, unit=unit, is_estimated=estimated,
         )
         return True
 
@@ -56,7 +87,8 @@ def add_manual_item(shopping_list, ingredient, quantity, unit):
     _validate_item_quantity(total)
     item.quantity = total
     item.per_person_quantity = None
-    item.save(update_fields=['quantity', 'per_person_quantity'])
+    item.is_estimated |= estimated
+    item.save(update_fields=['quantity', 'per_person_quantity', 'is_estimated'])
     return False
 
 
@@ -133,7 +165,38 @@ def _find_shopping_item(shopping_list, ingredient, name, unit):
     return items.filter(ingredient__isnull=True, name=name).first()
 
 
-def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
+def _normalize_legacy_metric_items(shopping_list, ingredient, unit):
+    legacy_unit = {'g': 'kg', 'ml': 'l'}.get(unit)
+    if legacy_unit is None:
+        return
+    related = shopping_list.items.filter(ingredient=ingredient)
+    legacy = list(related.filter(unit=legacy_unit).order_by('id'))
+    if not legacy:
+        return
+    base = list(related.filter(unit=unit).order_by('id'))
+    items = base + legacy
+    if any(item.checked != items[0].checked for item in items):
+        return
+    total = sum(item.quantity for item in base) + sum(item.quantity * 1000 for item in legacy)
+    try:
+        _validate_item_quantity(total)
+    except ValidationError:
+        return
+
+    item = items[0]
+    item.quantity = total
+    item.unit = unit
+    item.per_person_quantity = None
+    item.is_estimated = any(previous.is_estimated for previous in items)
+    item.save(update_fields=['quantity', 'unit', 'per_person_quantity', 'is_estimated'])
+    related.filter(pk__in=[previous.pk for previous in items[1:]]).delete()
+    ShoppingListRecipeIngredient.objects.filter(
+        shopping_list_recipe__shopping_list=shopping_list,
+        ingredient=ingredient, unit=legacy_unit, conversion_factor__isnull=True,
+    ).update(conversion_factor=Decimal('1000'))
+
+
+def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta, estimated=False):
     delta = delta.quantize(DISPLAY_QUANTITY)
     if delta == 0:
         return
@@ -149,11 +212,12 @@ def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
         item.quantity = new_quantity
         item.per_person_quantity = None
         item.name = name
+        item.is_estimated |= estimated
+        fields = ['quantity', 'per_person_quantity', 'name', 'is_estimated']
         if ingredient and item.ingredient_id is None:
             item.ingredient = ingredient
-            item.save(update_fields=['quantity', 'per_person_quantity', 'name', 'ingredient'])
-        else:
-            item.save(update_fields=['quantity', 'per_person_quantity', 'name'])
+            fields.append('ingredient')
+        item.save(update_fields=fields)
         return
 
     if delta > 0:
@@ -165,6 +229,7 @@ def _apply_quantity_delta(shopping_list, ingredient, name, unit, delta):
             unit=unit,
             quantity=delta,
             per_person_quantity=None,
+            is_estimated=estimated,
         )
 
 
@@ -173,6 +238,23 @@ def _validate_item_quantity(quantity):
         ShoppingListItem._meta.get_field('quantity').run_validators(quantity)
     except ValidationError as error:
         raise ValidationError({'quantity': error}) from error
+
+
+def _recipe_contribution(entry_ingredient, people_count):
+    quantity = quantity_for_people(entry_ingredient.quantity_per_person, people_count)
+    return _converted_quantity(quantity, entry_ingredient.conversion_factor)
+
+
+def _apply_recipe_delta(shopping_list, entry_ingredient, delta):
+    factor = entry_ingredient.conversion_factor
+    _apply_quantity_delta(
+        shopping_list,
+        entry_ingredient.ingredient,
+        entry_ingredient.display_name,
+        _converted_unit(entry_ingredient.unit, factor),
+        delta,
+        estimated=factor is not None and entry_ingredient.unit in HOUSEHOLD_FACTORS and delta > 0,
+    )
 
 
 @transaction.atomic
@@ -189,19 +271,22 @@ def add_recipe_to_shopping_list(shopping_list, recipe, people_count, included_re
     prefetch_related_objects([recipe], 'ingredients__ingredient')
     for recipe_ingredient in recipe.ingredients.all():
         ingredient = recipe_ingredient.ingredient
+        unit = recipe_ingredient.unit
+        factor = _conversion_factor(ingredient, unit)
         is_included = recipe_ingredient.id in included_ids
         entry_ingredient = ShoppingListRecipeIngredient.objects.create(
             shopping_list_recipe=recipe_entry,
             ingredient=ingredient,
             name=ingredient.name,
-            unit=recipe_ingredient.unit,
+            unit=unit,
+            conversion_factor=factor,
             quantity_per_person=recipe_ingredient.quantity_per_person,
             is_included=is_included,
         )
 
         if is_included:
-            quantity = quantity_for_people(entry_ingredient.quantity_per_person, people_count)
-            _apply_quantity_delta(shopping_list, ingredient, ingredient.name, entry_ingredient.unit, quantity)
+            _normalize_legacy_metric_items(shopping_list, ingredient, _converted_unit(unit, factor))
+            _apply_recipe_delta(shopping_list, entry_ingredient, _recipe_contribution(entry_ingredient, people_count))
 
     return recipe_entry
 
@@ -219,21 +304,15 @@ def update_recipe_entry(recipe_entry, people_count, included_entry_ingredient_id
     for entry_ingredient in entry_ingredients:
         old_quantity = Decimal('0.00')
         if entry_ingredient.is_included:
-            old_quantity = quantity_for_people(entry_ingredient.quantity_per_person, old_people_count)
+            old_quantity = _recipe_contribution(entry_ingredient, old_people_count)
 
         new_is_included = entry_ingredient.id in included_ids
         new_quantity = Decimal('0.00')
         if new_is_included:
-            new_quantity = quantity_for_people(entry_ingredient.quantity_per_person, people_count)
+            new_quantity = _recipe_contribution(entry_ingredient, people_count)
 
         delta = (new_quantity - old_quantity).quantize(DISPLAY_QUANTITY)
-        _apply_quantity_delta(
-            recipe_entry.shopping_list,
-            entry_ingredient.ingredient,
-            entry_ingredient.display_name,
-            entry_ingredient.unit,
-            delta,
-        )
+        _apply_recipe_delta(recipe_entry.shopping_list, entry_ingredient, delta)
 
         if entry_ingredient.is_included != new_is_included:
             entry_ingredient.is_included = new_is_included
@@ -256,14 +335,8 @@ def remove_recipe_entry(recipe_entry):
         if not entry_ingredient.is_included:
             continue
 
-        quantity = quantity_for_people(entry_ingredient.quantity_per_person, recipe_entry.people_count)
-        _apply_quantity_delta(
-            recipe_entry.shopping_list,
-            entry_ingredient.ingredient,
-            entry_ingredient.display_name,
-            entry_ingredient.unit,
-            -quantity,
-        )
+        quantity = _recipe_contribution(entry_ingredient, recipe_entry.people_count)
+        _apply_recipe_delta(recipe_entry.shopping_list, entry_ingredient, -quantity)
 
     recipe_entry.delete()
 
@@ -271,10 +344,18 @@ def remove_recipe_entry(recipe_entry):
 @transaction.atomic
 def remove_shopping_item(item):
     _lock_shopping_list(item.shopping_list_id)
+    item = ShoppingListItem.objects.filter(pk=item.pk).first()
+    if item is None:
+        return
+    units = Q(unit=item.unit, conversion_factor__isnull=True)
+    if item.unit == 'g':
+        units |= Q(unit__in=('kg', *HOUSEHOLD_FACTORS), conversion_factor__isnull=False)
+    elif item.unit == 'ml':
+        units |= Q(unit='l', conversion_factor__isnull=False)
     entry_ingredients = ShoppingListRecipeIngredient.objects.filter(
+        units,
         shopping_list_recipe__shopping_list=item.shopping_list,
         is_included=True,
-        unit=item.unit,
     )
     if item.ingredient_id:
         entry_ingredients = entry_ingredients.filter(ingredient=item.ingredient)

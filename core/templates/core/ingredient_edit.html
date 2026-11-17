@@ -4,6 +4,7 @@
 <div class="card">
     <h1>Modifier l'ingrédient</h1>
     <p class="small muted">{{ ingredient.name }}</p>
+    <p class="small muted">Les équivalences en grammes sont facultatives. Elles s’appliquent aux prochains ajouts aux courses.</p>
     <form method="post">
         {% csrf_token %}
         {{ form.as_p }}

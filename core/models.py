@@ -1,6 +1,7 @@
 ﻿from decimal import Decimal
 
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -29,6 +30,18 @@ class IngredientCategory(models.Model):
 
 class Ingredient(models.Model):
     name = models.CharField(max_length=200, unique=True)
+    grams_per_teaspoon = models.DecimalField(
+        'Grammes par cuillère à café rase', max_digits=6, decimal_places=2,
+        null=True, blank=True, validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    grams_per_tablespoon = models.DecimalField(
+        'Grammes par cuillère à soupe rase', max_digits=6, decimal_places=2,
+        null=True, blank=True, validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    grams_per_pinch = models.DecimalField(
+        'Grammes par pincée', max_digits=6, decimal_places=2,
+        null=True, blank=True, validators=[MinValueValidator(Decimal('0.01'))],
+    )
     category = models.ForeignKey(
         IngredientCategory,
         on_delete=models.SET_NULL,
@@ -140,6 +153,7 @@ class ShoppingListRecipeIngredient(models.Model):
     name = models.CharField(max_length=200)
     unit = models.CharField(max_length=30, blank=True, choices=UNIT_CHOICES)
     quantity_per_person = models.DecimalField(max_digits=8, decimal_places=2)
+    conversion_factor = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     is_included = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -177,6 +191,7 @@ class ShoppingListItem(models.Model):
     quantity = models.DecimalField(max_digits=10, decimal_places=2)
     per_person_quantity = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
     checked = models.BooleanField(default=False)
+    is_estimated = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -204,6 +219,12 @@ class ShoppingListItem(models.Model):
         people = max(self.shopping_list.people_count, 1)
         self.quantity = (Decimal(people) * self.per_person_quantity).quantize(Decimal('0.01'))
         self.save(update_fields=['quantity'])
+
+    @property
+    def display_measure(self):
+        if self.quantity >= 1000 and self.unit in ('g', 'ml'):
+            return (self.quantity / 1000).normalize(), {'g': 'kg', 'ml': 'l'}[self.unit]
+        return self.quantity.normalize(), self.get_unit_display()
 
 
 class HomeHubItemAddition(models.Model):
